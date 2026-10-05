@@ -1,0 +1,86 @@
+# Push a tag like v0.1.0 to build the sidecar for every platform, publish the
+# binaries as a GitHub release, and pin their SHA-256s in sidecar.lock on the
+# default branch. scripts/install-sidecar.* download from that release and
+# refuse anything that doesn't match the pin.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { key: darwin-arm64, os: macos-latest, target: aarch64-apple-darwin }
+          - { key: darwin-x64, os: macos-latest, target: x86_64-apple-darwin }
+          # musl: static binaries that run on any distro's libc
+          - { key: linux-x64, os: ubuntu-latest, target: x86_64-unknown-linux-musl }
+          - { key: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+          - { key: windows-x64, os: windows-latest, target: x86_64-pc-windows-msvc, exe: .exe }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sidecar
+          key: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }} --manifest-path sidecar/Cargo.toml
+      - name: Package
+        shell: bash
+        run: |
+          src=sidecar/target/${{ matrix.target }}/release/anki-wait-sidecar${{ matrix.exe }}
+          "$src" status   # smoke test: it starts and answers
+          mkdir dist
+          sha=$({ sha256sum "$src" 2>/dev/null || shasum -a 256 "$src"; } | cut -d' ' -f1)
+          gzip -9 -c "$src" > dist/anki-wait-sidecar-${{ matrix.key }}.gz
+          echo "${{ matrix.key }} $sha" > dist/${{ matrix.key }}.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.key }}
+          path: dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write sidecar.lock
+        run: |
+          {
+            echo "# Pinned by .github/workflows/release.yml; scripts/install-sidecar.* read it."
+            echo "repo $GITHUB_REPOSITORY"
+            echo "version $GITHUB_REF_NAME"
+            cat dist/*.sha256 | sort
+          } > sidecar.lock
+          cat sidecar.lock
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.gz sidecar.lock --title "$GITHUB_REF_NAME" --generate-notes
+      - name: Pin it on the default branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          git add sidecar.lock
+          git commit -m "Pin sidecar $GITHUB_REF_NAME"
+          git push

@@ -12,7 +12,7 @@ const PROPS = {
 }
 
 type Call = { args: string[]; stdin?: string }
-type Fake = { loggedIn?: boolean; isMissing?: boolean; cards?: { question: string; answer: string }[] }
+type Fake = { loggedIn?: boolean; isMissing?: boolean; installs?: string[][]; cards?: { question: string; answer: string }[] }
 
 // Stands in for the Rust sidecar: the same commands and JSON replies.
 function fakeSidecar(calls: Call[], fake: Fake = {}) {
@@ -24,6 +24,14 @@ function fakeSidecar(calls: Call[], fake: Fake = {}) {
 
   return async (_$: unknown, e: { argv: readonly string[]; init?: { stdin?: string } }) => {
     if (isMissing) return { deny: 'ENOENT: no such file or directory' }
+    const done = (reply: object) => ({
+      value: { exitCode: 0, stdout: `${JSON.stringify(reply)}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    })
+    if (e.argv[0] === 'sh') {
+      fake.installs?.push([...e.argv])
+      return done({ ok: true, path: '/plugins/anki-wait/bin/anki-wait-sidecar', source: 'release' })
+    }
+    expect(e.argv[0]).toBe('/plugins/anki-wait/bin/anki-wait-sidecar')
     const [, command, ...rest] = e.argv
     calls.push({ args: [command!, ...rest], stdin: e.init?.stdin })
     const counts = { new: queue.length, learning: 0, review: 0 }
@@ -121,13 +129,30 @@ describe('register', () => {
     await ui.unmount()
   })
 
-  test('points at the build script when the sidecar is missing', async ($, on) => {
+  test('installs the sidecar once, then runs it from where the installer put it', async ($, on) => {
+    const calls: Call[] = []
+    const installs: string[][] = []
+    mock.clock(on, { now: 1000 })
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('process.run', fakeSidecar(calls, { installs }))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+    const ui = await $.ui.mount({ plugin: 'anki-wait', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    await ui.press({ key: 'show' })
+    await ui.press({ key: 'good' })
+
+    expect(installs).toHaveLength(1)
+    expect(installs[0]![1]).toMatch(/scripts\/install-sidecar\.sh$/)
+    expect(calls.map(c => c.args[0])).toEqual(['next', 'answer', 'next'])
+    await ui.unmount()
+  })
+
+  test('says the sidecar is unavailable when it can\'t be found', async ($, on) => {
     mock.clock(on, { now: 1000 })
     on('turn.start', (_$, e) => ({ turnId: e.turnId }))
     on('process.run', fakeSidecar([], { isMissing: true }))
     await $.turn.start({ text: 'hej', turnId: 't1' })
     const ui = await $.ui.mount({ plugin: 'anki-wait', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
-    expect(await ui.find({ type: 'Text', text: /sidecar not built/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /sidecar unavailable/ })).toBeDefined()
     await ui.unmount()
   })
 

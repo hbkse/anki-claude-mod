@@ -18,6 +18,7 @@ const MAX_ANSWER_MS = 60_000
 const SYNC_EVERY_MS = 10 * 60_000
 const SYNC_TIMEOUT_MS = 120_000
 const CALL_TIMEOUT_MS = 15_000
+const INSTALL_TIMEOUT_MS = 180_000
 
 const card = atom({ plugin: 'anki-wait', key: 'card' } as const, null)
 const isRevealed = atom({ plugin: 'anki-wait', key: 'isRevealed' } as const, false)
@@ -49,6 +50,7 @@ let settings: Settings = {
   easyKey: '4',
 }
 let calls: Promise<unknown> = Promise.resolve()
+let binPath: string | null = null
 let dealing: Promise<void> | null = null
 let shownAt = 0
 let revealedAt = 0
@@ -91,24 +93,44 @@ export function parseReply(stdout: string, stderr: string): Reply {
   return { ok: false, code: 'crash', message: (stderr || stdout).trim().slice(0, 300) || 'no output' }
 }
 
-function sidecar($: EngineInterface, args: string[], init: { stdin?: string; timeoutMs?: number } = {}): Promise<Reply> {
-  const bin = settings.sidecarPath.trim() || `${$.plugin.root}/bin/anki-wait-sidecar`
-  const run = calls.then(async (): Promise<Reply> => {
-    try {
-      const { stdout, stderr } = await $.process.run([bin, ...args], {
-        stdin: init.stdin,
-        timeoutMs: init.timeoutMs ?? CALL_TIMEOUT_MS,
-      })
-      return parseReply(stdout, stderr)
-    } catch (err) {
-      const message = String(err)
-      const missing = /ENOENT|not found|no such file|cannot start/i.test(message)
-      return { ok: false, code: missing ? 'missing' : 'crash', message }
-    }
-  })
-  calls = run.catch(() => undefined)
+async function run($: EngineInterface, argv: string[], timeoutMs: number, stdin?: string): Promise<Reply> {
+  try {
+    const { stdout, stderr } = await $.process.run(argv, { stdin, timeoutMs })
+    return parseReply(stdout, stderr)
+  } catch (err) {
+    const message = String(err)
+    const missing = /ENOENT|not found|no such file|cannot start/i.test(message)
+    return { ok: false, code: missing ? 'missing' : 'crash', message }
+  }
+}
 
-  return run
+// sidecarPath when set; else whatever the install script leaves in bin/: a
+// local build, or the release sidecar.lock pins, downloaded and checked.
+async function locate($: EngineInterface): Promise<Reply> {
+  const configured = settings.sidecarPath.trim()
+  if (configured) return { ok: true, path: configured }
+
+  const root = $.plugin.root
+  const isWindows = (await $.env.get('OS').catch(() => undefined)) === 'Windows_NT'
+  const argv = isWindows
+    ? ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `${root}\\scripts\\install-sidecar.ps1`]
+    : ['sh', `${root}/scripts/install-sidecar.sh`]
+
+  return run($, argv, INSTALL_TIMEOUT_MS)
+}
+
+function sidecar($: EngineInterface, args: string[], init: { stdin?: string; timeoutMs?: number } = {}): Promise<Reply> {
+  const call = calls.then(async (): Promise<Reply> => {
+    if (binPath === null) {
+      const found = await locate($)
+      if (!found.ok) return found
+      binPath = String(found.path)
+    }
+    return run($, [binPath, ...args], init.timeoutMs ?? CALL_TIMEOUT_MS, init.stdin)
+  })
+  calls = call.catch(() => undefined)
+
+  return call
 }
 
 function deckName(): string {
@@ -124,7 +146,7 @@ async function failed($: EngineInterface, reply: Extract<Reply, { ok: false }>):
   if (reply.code === 'busy') return
   const status: Band['status'] =
     reply.code === 'logged_out' || reply.code === 'auth' ? 'logged_out'
-    : reply.code === 'missing' ? 'missing'
+    : ['missing', 'unsupported', 'checksum'].includes(reply.code) ? 'missing'
     : 'error'
   await setBand($, { status, deck: deckName(), message: reply.message })
   await update($, card, () => null)
@@ -310,7 +332,7 @@ export const register: Register = (on, options) => {
     if (current === null) {
       if (status === 'syncing') return <Text dimColor>  {title} · syncing with AnkiWeb…</Text>
       if (status === 'logged_out') return <Text dimColor>  anki · /anki login to review while Claude works</Text>
-      if (status === 'missing') return <Text dimColor>  anki · sidecar not built (scripts/build-sidecar.sh)</Text>
+      if (status === 'missing') return <Text dimColor>  anki · sidecar unavailable (/anki status)</Text>
       if (status === 'error') return <Text dimColor>  {title} · /anki status for details</Text>
       if (status === 'empty') return <Text dimColor>  {title} · nothing due ✓</Text>
       return next(e)

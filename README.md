@@ -27,18 +27,22 @@ To AnkiDroid, your reviews in Claude look like another device's, so they merge o
 
 ## Requirements
 
-- Claude Code 2.1.287 or later (mods support), in the terminal
-- To build the sidecar: Rust and `protoc` (`brew install protobuf`)
+Claude Code 2.1.287 or later, in the terminal or the Desktop app's Code tab. Prebuilt sidecars
+cover macOS (Apple Silicon, Intel), Linux (x64, arm64) and Windows (x64).
 
 ## Install
 
-```sh
-git clone <this repo> anki-wait && cd anki-wait
-./scripts/build-sidecar.sh          # first build compiles Anki's core: a few minutes
-claude --plugin-dir .
+```
+/plugin marketplace add hbkse/anki-wait
+/plugin install anki-wait@anki-wait
+/reload-plugins
 ```
 
-In Claude Code, set your AnkiWeb email and password under `/config` → anki-wait, then run:
+The first session downloads the sidecar for your platform from this repo's GitHub release
+pinned in [`sidecar.lock`](sidecar.lock). It's about 7 MB, and it is only installed if its SHA-256
+matches the pin. It goes in `bin/` inside the plugin.
+
+Then set your AnkiWeb email and password under `/config` → anki-wait, and run:
 
 ```
 /anki login
@@ -85,20 +89,32 @@ A key is one digit or one lowercase letter. Digits work straight from an empty c
 - If AnkiWeb asks for a one-way sync (after a note type change, say), the band tells you.
   `/anki download` drops reviews from Claude that haven't synced yet; `/anki upload`
   overwrites AnkiWeb.
-- Function hooks are early access, and the desktop app doesn't draw mod bands yet.
+- Mods are new: their API can still change between Claude Code releases.
 
 ## Development
 
+Building the sidecar needs Rust and `protoc` (`brew install protobuf`). The first build compiles
+Anki's core and takes a few minutes.
+
 ```sh
+./scripts/build-sidecar.sh                  # into bin/, marked as a local build so it's never replaced
+claude --plugin-dir .
 claude plugin validate .
 claude plugin test .                        # mod tests, sidecar faked
-cargo build --manifest-path sidecar/Cargo.toml
 ANKI_WAIT_DIR=/tmp/aw sidecar/target/debug/anki-wait-sidecar seed 5   # debug builds only
 ANKI_WAIT_DIR=/tmp/aw sidecar/target/debug/anki-wait-sidecar next
 ```
 
 Anki's [`anki-sync-server`](https://docs.ankiweb.net/sync-server.html) works as a local AnkiWeb
 for sync tests. Log in with `"endpoint": "http://127.0.0.1:27701/"` on the sidecar's stdin.
+`ANKI_WAIT_RELEASE_URL` points the installer at another download location; the checksum is
+still checked.
+
+### Releasing
+
+Push a tag like `v0.1.0`. [`release.yml`](.github/workflows/release.yml) builds the sidecar on
+all five platforms, publishes them as a GitHub release, and commits their SHA-256s to
+`sidecar.lock` on the default branch. Installs pick that up with `/plugin update`.
 
 ## License
 

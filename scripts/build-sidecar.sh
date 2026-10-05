@@ -7,4 +7,6 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 cargo build --release --manifest-path "$root/sidecar/Cargo.toml"
 mkdir -p "$root/bin"
 cp "$root/sidecar/target/release/anki-wait-sidecar" "$root/bin/"
+# Marks bin/ as a local build, so install-sidecar.sh keeps it over a release.
+touch "$root/bin/.dev"
 echo "built $root/bin/anki-wait-sidecar"
