@@ -55,8 +55,10 @@ Then log in once:
 - **If Anki desktop is logged in on this computer**, it offers to reuse that login. No password
   needed: it copies the profile's sync key.
 - **Otherwise it opens a terminal window** that explains the login and asks for your AnkiWeb email
-  and password, with the password hidden. Over SSH or without a desktop, the command goes on your
-  clipboard to paste into any terminal instead.
+  and password, with the password hidden. It opens in the terminal you're running Claude Code in:
+  a new tmux or zellij window, or a new tab or window of Terminal, iTerm2, Ghostty, WezTerm, kitty,
+  Alacritty or Windows Terminal. In any other terminal, an editor's say, it uses your system's
+  default terminal. Over SSH without tmux, the command goes on your clipboard to paste instead.
 
 ### How your password is handled
 

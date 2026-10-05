@@ -221,7 +221,7 @@ fn login_interactive(endpoint: Option<String>) -> ExitCode {
          Your email and password go only to {server}, the same way Anki and\n\
          AnkiDroid log in. It answers with a sync key, and that key is all\n\
          anki-claude-mod keeps: your password is not saved anywhere.\n\
-         Source: https://github.com/hbkse/anki-claude-mod/blob/main/sidecar/src/main.rs\n"
+         Details: https://github.com/hbkse/anki-claude-mod#how-your-password-is-handled\n"
     );
 
     let close = |code: ExitCode| {

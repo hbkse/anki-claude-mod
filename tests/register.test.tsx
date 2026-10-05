@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { appleScriptString, menuPage, parseReply, shellQuote, syncEndpoint, tally } from '../hooks/register'
+import { appleScriptString, launchers, menuPage, parseReply, shellQuote, syncEndpoint, tally } from '../hooks/register'
 
 const PROPS = {
   hasSurvey: false,
@@ -356,5 +356,35 @@ describe('helpers', () => {
   test('quotes the login command for sh and AppleScript', async () => {
     expect(shellQuote("/Users/me/it's here/sidecar")).toBe("'/Users/me/it'\\''s here/sidecar'")
     expect(appleScriptString('\'/a b/c\' "x" \\')).toBe('"\'/a b/c\' \\"x\\" \\\\"')
+  })
+})
+
+describe('login window', () => {
+  const command = "'/bin/sidecar' 'login' '--interactive'"
+  const argv = ['/bin/sidecar', 'login', '--interactive']
+  const first = (host: Parameters<typeof launchers>[0]) => launchers(host, command, argv)[0]!.slice(0, 3)
+
+  test('opens in the terminal Claude Code runs in', async () => {
+    expect(first({ platform: 'darwin', env: { TERM_PROGRAM: 'Apple_Terminal' } })[0]).toBe('osascript')
+    expect(launchers({ platform: 'darwin', env: { TERM_PROGRAM: 'iTerm.app' } }, command, argv)[0]!.join(' ')).toMatch(/iTerm2/)
+    expect(first({ platform: 'darwin', env: { ALACRITTY_SOCKET: '/tmp/a.sock' } })).toEqual(['alacritty', 'msg', 'create-window'])
+    expect(first({ platform: 'linux', env: { WEZTERM_PANE: '0' } })).toEqual(['wezterm', 'cli', 'spawn'])
+    expect(first({ platform: 'linux', env: { KITTY_WINDOW_ID: '1' } })).toEqual(['kitty', '@', 'launch'])
+    expect(first({ platform: 'darwin', env: { TERM_PROGRAM: 'ghostty' } })).toEqual(['open', '-na', 'Ghostty.app'])
+    expect(first({ platform: 'windows', env: { WT_SESSION: 'x' } })).toEqual(['wt', '-w', '0'])
+  })
+
+  test('a multiplexer wins, since it is where the person is looking', async () => {
+    expect(launchers({ platform: 'darwin', env: { TMUX: '/tmp/tmux', TERM_PROGRAM: 'iTerm.app' } }, command, argv)[0])
+      .toEqual(['tmux', 'new-window', '-n', 'anki login', command])
+    expect(first({ platform: 'linux', env: { ZELLIJ: '0' } })).toEqual(['zellij', 'run', '--floating'])
+  })
+
+  test('falls back to the platform\'s own terminal after the host\'s', async () => {
+    const tried = launchers({ platform: 'darwin', env: { ALACRITTY_SOCKET: '/tmp/a.sock' } }, command, argv).map(l => l[0])
+    expect(tried).toEqual(['alacritty', 'open', 'osascript'])
+    expect(launchers({ platform: 'darwin', env: { TERM_PROGRAM: 'vscode' } }, command, argv).map(l => l[0])).toEqual(['osascript'])
+    expect(launchers({ platform: 'linux', env: {} }, command, argv).map(l => l[0])).toEqual(['sh'])
+    expect(launchers({ platform: 'windows', env: {} }, command, argv)[0]![0]).toBe('powershell')
   })
 })

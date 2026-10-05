@@ -295,6 +295,98 @@ export function appleScriptString(text: string): string {
   return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 }
 
+/** What the terminal Claude Code runs in says about itself, through the environment. */
+export type Host = {
+  platform: 'darwin' | 'linux' | 'windows'
+  env: Partial<Record<
+    'TMUX' | 'ZELLIJ' | 'TERM_PROGRAM' | 'KITTY_WINDOW_ID' | 'WEZTERM_PANE' | 'ALACRITTY_SOCKET' | 'WT_SESSION',
+    string
+  >>
+}
+
+// Runs a GUI program in the background, so the call returns once it starts.
+function detached(argv: string[]): string[] {
+  return ['sh', '-c', 'command -v "$1" >/dev/null || exit 1; ("$@" >/dev/null 2>&1 &)', 'sh', ...argv]
+}
+
+/**
+ * The ways to open the login, best first: a new tab or window of the terminal
+ * Claude Code runs in, then the platform's own terminal. `command` is the login
+ * as one sh command line; `argv` the same as words, for Windows.
+ */
+export function launchers(host: Host, command: string, argv: string[]): string[][] {
+  const { env, platform } = host
+  const sh = ['sh', '-c', command]
+  const out: string[][] = []
+  const terminalApp = [
+    'osascript', '-e', `tell application "Terminal" to do script ${appleScriptString(command)}`,
+    '-e', 'tell application "Terminal" to activate',
+  ]
+
+  // A multiplexer first: it's where the person is looking, even over SSH.
+  if (env.TMUX) out.push(['tmux', 'new-window', '-n', 'anki login', command])
+  if (env.ZELLIJ) out.push(['zellij', 'run', '--floating', '--close-on-exit', '--name', 'anki login', '--', ...sh])
+
+  if (env.TERM_PROGRAM === 'Apple_Terminal') out.push(terminalApp)
+  if (env.TERM_PROGRAM === 'iTerm.app') {
+    out.push([
+      'osascript',
+      '-e', 'tell application "iTerm2" to tell current window to create tab with default profile',
+      '-e', `tell application "iTerm2" to tell current session of current window to write text ${appleScriptString(command)}`,
+    ])
+  }
+  if (env.TERM_PROGRAM === 'WezTerm' || env.WEZTERM_PANE) out.push(['wezterm', 'cli', 'spawn', '--', ...sh])
+  if (env.TERM_PROGRAM === 'ghostty') {
+    out.push(platform === 'darwin' ? ['open', '-na', 'Ghostty.app', '--args', '-e', ...sh] : detached(['ghostty', '-e', ...sh]))
+  }
+  if (env.KITTY_WINDOW_ID) {
+    out.push(['kitty', '@', 'launch', '--type=tab', '--title', 'anki login', ...sh])
+    out.push(platform === 'darwin' ? ['open', '-na', 'kitty.app', '--args', ...sh] : detached(['kitty', ...sh]))
+  }
+  if (env.ALACRITTY_SOCKET) {
+    out.push(['alacritty', 'msg', 'create-window', '-T', 'anki login', '-e', ...sh])
+    out.push(platform === 'darwin' ? ['open', '-na', 'Alacritty.app', '--args', '-e', ...sh] : detached(['alacritty', '-e', ...sh]))
+  }
+  if (platform === 'windows' && env.WT_SESSION) out.push(['wt', '-w', '0', 'new-tab', '--title', 'anki login', '--', ...argv])
+
+  // The platform's own, for a terminal we don't know (an editor's, say).
+  if (platform === 'darwin') out.push(terminalApp)
+  if (platform === 'windows') {
+    const [file = '', ...args] = argv
+    const list = args.map(a => `'${a.replace(/'/g, "''")}'`).join(',')
+    out.push(['powershell', '-NoProfile', '-Command', `Start-Process -FilePath '${file.replace(/'/g, "''")}' -ArgumentList ${list}`])
+  }
+  if (platform === 'linux') {
+    out.push(['sh', '-c', [
+      '[ -n "$DISPLAY$WAYLAND_DISPLAY" ] || exit 1',
+      'for t in x-terminal-emulator gnome-terminal konsole xfce4-terminal xterm; do',
+      '  command -v "$t" >/dev/null || continue',
+      '  if [ "$t" = gnome-terminal ]; then set -- "$t" --; else set -- "$t" -e; fi',
+      '  (setsid "$@" sh -c "$0" >/dev/null 2>&1 &); exit 0',
+      'done; exit 1',
+    ].join('\n'), command])
+  }
+
+  return out
+}
+
+async function detectHost($: EngineInterface): Promise<Host> {
+  const get = (p: Promise<string | undefined>) => p.catch(() => undefined)
+  const isWindows = (await get($.env.get('OS'))) === 'Windows_NT'
+  const uname = isWindows ? undefined : await $.process.run(['uname', '-s'], { timeoutMs: CALL_TIMEOUT_MS }).catch(() => undefined)
+  const env: Host['env'] = {
+    TMUX: await get($.env.get('TMUX')),
+    ZELLIJ: await get($.env.get('ZELLIJ')),
+    TERM_PROGRAM: await get($.env.get('TERM_PROGRAM')),
+    KITTY_WINDOW_ID: await get($.env.get('KITTY_WINDOW_ID')),
+    WEZTERM_PANE: await get($.env.get('WEZTERM_PANE')),
+    ALACRITTY_SOCKET: await get($.env.get('ALACRITTY_SOCKET')),
+    WT_SESSION: await get($.env.get('WT_SESSION')),
+  }
+
+  return { platform: isWindows ? 'windows' : uname?.stdout.trim() === 'Darwin' ? 'darwin' : 'linux', env }
+}
+
 // The login happens in a terminal window of its own, so the password goes
 // from the keyboard to the sidecar and AnkiWeb, and never through Claude Code:
 // not its settings, this module, other mods' hooks or the transcript.
@@ -303,33 +395,13 @@ async function openLoginWindow($: EngineInterface): Promise<string> {
   if (!found.ok || binPath === null) return `Sidecar unavailable: ${found.ok ? 'not installed' : found.message}`
 
   const endpoint = syncEndpoint(settings.syncServer)
-  const args = ['login', '--interactive', ...(endpoint ? ['--endpoint', endpoint] : [])]
+  const argv = [binPath, 'login', '--interactive', ...(endpoint ? ['--endpoint', endpoint] : [])]
   const dir = await $.env.get('ANKI_CLAUDE_MOD_DIR').catch(() => undefined)
-  const command = [dir ? `ANKI_CLAUDE_MOD_DIR=${shellQuote(dir)}` : '', ...[binPath, ...args].map(shellQuote)]
-    .filter(Boolean)
-    .join(' ')
-  const opened = 'Opened a login window: log in there once, and your cards show up on your next prompt.'
+  const command = [dir ? `ANKI_CLAUDE_MOD_DIR=${shellQuote(dir)}` : '', ...argv.map(shellQuote)].filter(Boolean).join(' ')
 
-  if ((await $.env.get('OS').catch(() => undefined)) === 'Windows_NT') {
-    const list = args.map(a => `'${a.replace(/'/g, "''")}'`).join(',')
-    const start = `Start-Process -FilePath '${binPath.replace(/'/g, "''")}' -ArgumentList ${list}`
-    const r = await $.process.run(['powershell', '-NoProfile', '-Command', start], { timeoutMs: CALL_TIMEOUT_MS }).catch(() => undefined)
-    if (r?.exitCode === 0) return opened
-  } else {
-    const os = await $.process.run(['uname', '-s'], { timeoutMs: CALL_TIMEOUT_MS }).catch(() => undefined)
-    const argv = os?.stdout.trim() === 'Darwin'
-      ? ['osascript', '-e', `tell application "Terminal" to do script ${appleScriptString(command)}`, '-e', 'tell application "Terminal" to activate']
-      // The first terminal there is, started in the background so this returns.
-      : ['sh', '-c', [
-        '[ -n "$DISPLAY$WAYLAND_DISPLAY" ] || exit 1',
-        'for t in x-terminal-emulator gnome-terminal konsole xfce4-terminal kitty alacritty xterm; do',
-        '  command -v "$t" >/dev/null || continue',
-        '  if [ "$t" = gnome-terminal ]; then set -- "$t" --; else set -- "$t" -e; fi',
-        '  (setsid "$@" sh -c "$CMD" >/dev/null 2>&1 &); exit 0',
-        'done; exit 1',
-      ].join('\n')]
-    const r = await $.process.run(argv, { env: { CMD: command }, timeoutMs: CALL_TIMEOUT_MS }).catch(() => undefined)
-    if (r?.exitCode === 0) return opened
+  for (const launcher of launchers(await detectHost($), command, argv)) {
+    const r = await $.process.run(launcher, { timeoutMs: CALL_TIMEOUT_MS }).catch(() => undefined)
+    if (r?.exitCode === 0) return 'Opened a login window: log in there once, and your cards show up on your next prompt.'
   }
 
   // No window we can open (SSH, no desktop): hand over the command instead.
