@@ -20,6 +20,12 @@ Then run `/anki`
 
 or `/anki setup` for local decks
 
+## Updates
+
+Automatic updates: `/plugin` → **Marketplaces** tab → `hbkse` → **Enable auto-update**
+
+Manual updates: `/plugin` → **Installed** → `anki` → **Update now**
+
 ## Commands
 
 | Command | |
