@@ -190,7 +190,7 @@ describe('replies', () => {
 
 describe('keys', () => {
   test('default layout is show 1, again 2, good 3, easy 4', async () => {
-    const defaults = { ankiwebUsername: '', ankiwebPassword: '', syncServer: '', deck: '', sidecarPath: '', showKey: '1', againKey: '2', hardKey: '', goodKey: '3', easyKey: '4' }
+    const defaults = { ankiwebUsername: '', ankiwebPassword: '', syncServer: '', deck: '', showKey: '1', againKey: '2', hardKey: '', goodKey: '3', easyKey: '4' }
     expect(gradeButtons(defaults).map(g => `${g.key}:${g.name}`)).toEqual(['2:again', '3:good', '4:easy'])
   })
 

@@ -35,7 +35,7 @@ $key = 'windows-x64'
 $repo = Field 'repo'
 $version = Field 'version'
 $sha = Field $key
-if (-not $version -or -not $sha) { Fail 'missing' 'no sidecar release pinned yet; set sidecarPath to a local build' }
+if (-not $version -or -not $sha) { Fail 'missing' 'no sidecar release pinned yet; build one into bin\ with cargo' }
 
 if ((Test-Path $bin) -and ((Sha256 $bin) -eq $sha)) { Ok 'release' }
 

@@ -44,13 +44,6 @@
       "required": false,
       "default": ""
     },
-    "sidecarPath": {
-      "type": "string",
-      "title": "Sidecar path",
-      "description": "Path to the anki-claude-mod-sidecar binary. Empty uses bin/ inside the plugin.",
-      "required": false,
-      "default": ""
-    },
     "showKey": {
       "type": "string",
       "title": "Show key",

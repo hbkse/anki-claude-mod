@@ -71,7 +71,6 @@ Replies come back as toasts, so none of this ends up in the transcript Claude re
 | --- | --- | --- |
 | `deck` | *(empty)* | Deck to review, subdecks included. Empty uses the collection's current deck. |
 | `syncServer` | *(empty)* | A [self-hosted sync server](https://docs.ankiweb.net/sync-server.html) URL instead of AnkiWeb |
-| `sidecarPath` | *(empty)* | Where the sidecar is, if not `bin/` in the plugin |
 | `showKey` | `1` | Shows the answer |
 | `againKey` / `hardKey` / `goodKey` / `easyKey` | `2` / *(empty)* / `3` / `4` | Grades; an empty key hides that button |
 

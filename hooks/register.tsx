@@ -31,7 +31,6 @@ type Settings = {
   ankiwebPassword: string
   syncServer: string
   deck: string
-  sidecarPath: string
   showKey: string
 } & Record<`${Grade}Key`, string>
 
@@ -42,7 +41,6 @@ let settings: Settings = {
   ankiwebPassword: '',
   syncServer: '',
   deck: '',
-  sidecarPath: '',
   showKey: '1',
   againKey: '2',
   hardKey: '',
@@ -104,12 +102,9 @@ async function run($: EngineInterface, argv: string[], timeoutMs: number, stdin?
   }
 }
 
-// sidecarPath when set; else whatever the install script leaves in bin/: a
-// local build, or the release sidecar.lock pins, downloaded and checked.
+// Whatever the install script leaves in bin/: a local build, or the release
+// sidecar.lock pins, downloaded and checked.
 async function locate($: EngineInterface): Promise<Reply> {
-  const configured = settings.sidecarPath.trim()
-  if (configured) return { ok: true, path: configured }
-
   const root = $.plugin.root
   const isWindows = (await $.env.get('OS').catch(() => undefined)) === 'Windows_NT'
   const argv = isWindows
