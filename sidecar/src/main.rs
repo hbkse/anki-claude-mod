@@ -1,7 +1,7 @@
-//! anki-wait-sidecar: a one-shot CLI over Anki's Rust core (rslib).
+//! anki-claude-mod-sidecar: a one-shot CLI over Anki's Rust core (rslib).
 //!
 //! Each command opens the local collection, does one thing, closes it and
-//! prints one JSON object on stdout. The anki-wait mod runs it through
+//! prints one JSON object on stdout. The anki-claude-mod mod runs it through
 //! `$.process.run`, one call at a time: the collection is opened with an
 //! exclusive lock, so two calls at once would see `busy`.
 //!
@@ -81,12 +81,12 @@ struct Auth {
 }
 
 fn data_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("ANKI_WAIT_DIR") {
+    if let Some(dir) = std::env::var_os("ANKI_CLAUDE_MOD_DIR") {
         return PathBuf::from(dir);
     }
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("anki-wait")
+        .join("anki-claude-mod")
 }
 
 fn col_path() -> PathBuf {

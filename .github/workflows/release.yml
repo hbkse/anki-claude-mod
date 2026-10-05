@@ -42,11 +42,11 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          src=sidecar/target/${{ matrix.target }}/release/anki-wait-sidecar${{ matrix.exe }}
+          src=sidecar/target/${{ matrix.target }}/release/anki-claude-mod-sidecar${{ matrix.exe }}
           "$src" status   # smoke test: it starts and answers
           mkdir dist
           sha=$({ sha256sum "$src" 2>/dev/null || shasum -a 256 "$src"; } | cut -d' ' -f1)
-          gzip -9 -c "$src" > dist/anki-wait-sidecar-${{ matrix.key }}.gz
+          gzip -9 -c "$src" > dist/anki-claude-mod-sidecar-${{ matrix.key }}.gz
           echo "${{ matrix.key }} $sha" > dist/${{ matrix.key }}.sha256
       - uses: actions/upload-artifact@v4
         with:

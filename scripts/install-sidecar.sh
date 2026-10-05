@@ -1,14 +1,14 @@
 #!/bin/sh
-# Installs the anki-wait-sidecar release pinned in sidecar.lock into bin/
+# Installs the anki-claude-mod-sidecar release pinned in sidecar.lock into bin/
 # beside the plugin, checking it against the pinned SHA-256. The mod runs it
 # when a session starts; it prints one JSON line, as the sidecar does, and is
 # quick when the right binary is already there.
 #
-# ANKI_WAIT_RELEASE_URL replaces the GitHub release download base (for mirrors
+# ANKI_CLAUDE_MOD_RELEASE_URL replaces the GitHub release download base (for mirrors
 # and tests); the checksum is checked all the same.
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
-bin="$root/bin/anki-wait-sidecar"
+bin="$root/bin/anki-claude-mod-sidecar"
 lock="$root/sidecar.lock"
 
 ok() {
@@ -44,8 +44,8 @@ sha=$(field "$key")
 
 [ -x "$bin" ] && [ "$(sha256 "$bin")" = "$sha" ] && ok release
 
-base=${ANKI_WAIT_RELEASE_URL:-"https://github.com/$repo/releases/download/$version"}
-url="$base/anki-wait-sidecar-$key.gz"
+base=${ANKI_CLAUDE_MOD_RELEASE_URL:-"https://github.com/$repo/releases/download/$version"}
+url="$base/anki-claude-mod-sidecar-$key.gz"
 mkdir -p "$root/bin" || fail io "can't create $root/bin"
 tmp="$bin.download.$$"
 trap 'rm -f "$tmp" "$tmp.gz"' EXIT

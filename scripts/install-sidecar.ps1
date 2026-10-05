@@ -1,11 +1,11 @@
-# Windows counterpart of install-sidecar.sh: installs the anki-wait-sidecar
+# Windows counterpart of install-sidecar.sh: installs the anki-claude-mod-sidecar
 # release pinned in sidecar.lock into bin\ beside the plugin, checking it
 # against the pinned SHA-256, and prints one JSON line.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $root = Split-Path -Parent $PSScriptRoot
 $binDir = Join-Path $root 'bin'
-$bin = Join-Path $binDir 'anki-wait-sidecar.exe'
+$bin = Join-Path $binDir 'anki-claude-mod-sidecar.exe'
 $lock = Join-Path $root 'sidecar.lock'
 
 function Ok($source) {
@@ -39,8 +39,8 @@ if (-not $version -or -not $sha) { Fail 'missing' 'no sidecar release pinned yet
 
 if ((Test-Path $bin) -and ((Sha256 $bin) -eq $sha)) { Ok 'release' }
 
-$base = if ($env:ANKI_WAIT_RELEASE_URL) { $env:ANKI_WAIT_RELEASE_URL } else { "https://github.com/$repo/releases/download/$version" }
-$url = "$base/anki-wait-sidecar-$key.gz"
+$base = if ($env:ANKI_CLAUDE_MOD_RELEASE_URL) { $env:ANKI_CLAUDE_MOD_RELEASE_URL } else { "https://github.com/$repo/releases/download/$version" }
+$url = "$base/anki-claude-mod-sidecar-$key.gz"
 $tmp = "$bin.download.$PID"
 try {
   New-Item -ItemType Directory -Force -Path $binDir | Out-Null

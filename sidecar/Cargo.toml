@@ -1,13 +1,13 @@
 [package]
-name = "anki-wait-sidecar"
+name = "anki-claude-mod-sidecar"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-description = "One-shot CLI over Anki's Rust core: AnkiWeb sync and reviews for the anki-wait mod"
+description = "One-shot CLI over Anki's Rust core: AnkiWeb sync and reviews for the anki-claude-mod mod"
 publish = false
 
 [[bin]]
-name = "anki-wait-sidecar"
+name = "anki-claude-mod-sidecar"
 path = "src/main.rs"
 
 [dependencies]

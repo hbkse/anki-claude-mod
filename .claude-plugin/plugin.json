@@ -1,5 +1,5 @@
 {
-  "name": "anki-wait",
+  "name": "anki-claude-mod",
   "version": "0.1.0",
   "description": "Review your AnkiWeb decks above the Claude Code prompt while Claude works. Syncs straight with AnkiWeb through Anki's own Rust core; no Anki desktop or AnkiConnect needed.",
   "author": {
@@ -47,7 +47,7 @@
     "sidecarPath": {
       "type": "string",
       "title": "Sidecar path",
-      "description": "Path to the anki-wait-sidecar binary. Empty uses bin/ inside the plugin.",
+      "description": "Path to the anki-claude-mod-sidecar binary. Empty uses bin/ inside the plugin.",
       "required": false,
       "default": ""
     },

@@ -8,6 +8,6 @@ export type Band = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'anki-wait': { card: Card | null; isRevealed: boolean; band: Band; counts: Counts | null }
+    'anki-claude-mod': { card: Card | null; isRevealed: boolean; band: Band; counts: Counts | null }
   }
 }

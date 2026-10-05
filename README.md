@@ -1,4 +1,4 @@
-# anki-wait
+# anki-claude-mod
 
 A Claude Code mod that shows your due Anki cards above the prompt while Claude works, and syncs
 your reviews straight to AnkiWeb. You don't need Anki desktop or AnkiConnect: it works if you
@@ -10,7 +10,7 @@ appears while a turn is running. When Claude finishes, it hides and leaves the p
 ## How it works
 
 ```
-Claude Code ── mod (hooks/register.tsx) ── $.process.run ──▶ anki-wait-sidecar ──▶ AnkiWeb
+Claude Code ── mod (hooks/register.tsx) ── $.process.run ──▶ anki-claude-mod-sidecar ──▶ AnkiWeb
                 draws the band, keys                         Rust, Anki's own core
 ```
 
@@ -34,7 +34,7 @@ cover macOS (Apple Silicon, Intel), Linux (x64, arm64) and Windows (x64).
 
 ```
 /plugin marketplace add hbkse/anki-claude-mod
-/plugin install anki-wait@anki-wait
+/plugin install anki-claude-mod@anki-claude-mod
 /reload-plugins
 ```
 
@@ -42,7 +42,7 @@ The first session downloads the sidecar for your platform from this repo's GitHu
 pinned in [`sidecar.lock`](sidecar.lock). It's about 7 MB, and it is only installed if its SHA-256
 matches the pin. It goes in `bin/` inside the plugin.
 
-Then set your AnkiWeb email and password under `/config` → anki-wait, and run:
+Then set your AnkiWeb email and password under `/config` → anki-claude-mod, and run:
 
 ```
 /anki login
@@ -77,7 +77,7 @@ A key is one digit or one lowercase letter. Digits work straight from an empty c
 
 ## Where things live
 
-`~/Library/Application Support/anki-wait/` on macOS (`$ANKI_WAIT_DIR` overrides it):
+`~/Library/Application Support/anki-claude-mod/` on macOS (`$ANKI_CLAUDE_MOD_DIR` overrides it):
 
 - `collection.anki2`: the sidecar's copy of your collection
 - `auth.json` (mode 600): your email and AnkiWeb sync key. The password is never stored.
@@ -101,13 +101,13 @@ Anki's core and takes a few minutes.
 claude --plugin-dir .
 claude plugin validate .
 claude plugin test .                        # mod tests, sidecar faked
-ANKI_WAIT_DIR=/tmp/aw sidecar/target/debug/anki-wait-sidecar seed 5   # debug builds only
-ANKI_WAIT_DIR=/tmp/aw sidecar/target/debug/anki-wait-sidecar next
+ANKI_CLAUDE_MOD_DIR=/tmp/aw sidecar/target/debug/anki-claude-mod-sidecar seed 5   # debug builds only
+ANKI_CLAUDE_MOD_DIR=/tmp/aw sidecar/target/debug/anki-claude-mod-sidecar next
 ```
 
 Anki's [`anki-sync-server`](https://docs.ankiweb.net/sync-server.html) works as a local AnkiWeb
 for sync tests. Log in with `"endpoint": "http://127.0.0.1:27701/"` on the sidecar's stdin.
-`ANKI_WAIT_RELEASE_URL` points the installer at another download location; the checksum is
+`ANKI_CLAUDE_MOD_RELEASE_URL` points the installer at another download location; the checksum is
 still checked.
 
 ### Releasing
