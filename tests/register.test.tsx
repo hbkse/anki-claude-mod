@@ -18,7 +18,7 @@ const DECKS = [
 ]
 
 type Call = { args: string[]; stdin?: string }
-type Fake = { isMissing?: boolean; installs?: string[][]; decks?: typeof DECKS; cards?: { question: string; answer: string }[] }
+type Fake = { isMissing?: boolean; desktopOpen?: boolean; installs?: string[][]; decks?: typeof DECKS; cards?: { question: string; answer: string }[] }
 
 function flag(args: readonly string[], name: string): string | undefined {
   const i = args.indexOf(name)
@@ -49,7 +49,11 @@ function fakeSidecar(calls: Call[], fake: Fake = {}) {
     const counts = { new: queue.length, learning: 0, review: 0 }
     const deck = flag(rest, '--deck')
 
+    if (fake.desktopOpen && ['next', 'decks', 'answer'].includes(command)) {
+      return done({ ok: false, code: 'desktop_open', message: 'Anki desktop has this collection open; close it to review here' })
+    }
     if (command === 'sync') return done({ ok: true, result: 'synced' })
+    if (command === 'setup') return done({ ok: true, collection: flag(rest, '--collection'), desktopOpen: false })
     if (command === 'decks') return done({ ok: true, decks })
     if (command === 'next') {
       if (deck && !decks.some(d => d.name === deck)) return done({ ok: false, code: 'no_deck', message: `no deck named ${deck}` })
@@ -287,6 +291,35 @@ describe('decks', () => {
     await $.turn.start({ text: 'hej', turnId: 't1' })
     const ui = await $.ui.mount({ plugin: 'anki', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
     expect(await ui.find({ type: 'Text', text: 'pick a deck' })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
+describe('local collection', () => {
+  test('pauses while Anki desktop has the collection open', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    mock.store(on, { deck: 'Svensk' })
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('process.run', fakeSidecar([], { desktopOpen: true }))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+    const ui = await $.ui.mount({ plugin: 'anki', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: /paused while Anki desktop is open/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('tries again on the next turn, once Anki desktop is closed', async ($, on) => {
+    const calls: Call[] = []
+    const fake = { desktopOpen: true }
+    mock.clock(on, { now: 1000 })
+    mock.store(on, { deck: 'Svensk' })
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('process.run', fakeSidecar(calls, fake))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+    fake.desktopOpen = false
+    await $.turn.start({ text: 'again', turnId: 't2' })
+    await $.turn.start({ text: 'and again', turnId: 't3' })
+    const ui = await $.ui.mount({ plugin: 'anki', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: 'att förhandla' })).toBeDefined()
     await ui.unmount()
   })
 })

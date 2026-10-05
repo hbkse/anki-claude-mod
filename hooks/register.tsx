@@ -151,6 +151,7 @@ async function failed($: EngineInterface, reply: Extract<Reply, { ok: false }>):
   if (reply.code === 'busy') return
   const status: Band['status'] =
     reply.code === 'logged_out' || reply.code === 'auth' ? 'logged_out'
+    : reply.code === 'desktop_open' ? 'desktop_open'
     : ['missing', 'unsupported', 'checksum'].includes(reply.code) ? 'missing'
     : 'error'
   await setBand($, { status, deck: deckChoice ?? '', message: reply.message })
@@ -401,7 +402,7 @@ async function openLoginWindow($: EngineInterface): Promise<string> {
 
   for (const launcher of launchers(await detectHost($), command, argv)) {
     const r = await $.process.run(launcher, { timeoutMs: CALL_TIMEOUT_MS }).catch(() => undefined)
-    if (r?.exitCode === 0) return 'Opened a login window: log in there once, and your cards show up on your next prompt.'
+    if (r?.exitCode === 0) return 'Opened a window to log in to AnkiWeb for syncing: log in there once, and your cards show up on your next prompt.'
   }
 
   // No window we can open (SSH, no desktop): hand over the command instead.
@@ -418,9 +419,9 @@ async function login($: EngineInterface): Promise<string> {
   const found = await sidecar($, ['desktop-logins'])
   const logins = found.ok ? (found.logins as { profile: string; username: string }[]).slice(0, 3) : []
   if (logins.length > 0) {
-    const labels = logins.map(l => `Reuse ${l.username || 'its login'}${logins.length > 1 ? ` (profile ${l.profile})` : ''}`)
+    const labels = logins.map(l => `Sync as ${l.username || 'its account'}${logins.length > 1 ? ` (profile ${l.profile})` : ''}`)
     const choice = await $.ui
-      .ask('Anki desktop is logged in to AnkiWeb on this computer. Reuse its login?', [...labels, 'Log in with my password'])
+      .ask('Anki desktop on this computer is logged in to AnkiWeb. Sync using its login?', [...labels, 'Log in to AnkiWeb with my password'])
       .catch(() => undefined)
     if (choice === undefined) return 'Login cancelled.'
     const picked = logins[labels.indexOf(choice)]
@@ -435,23 +436,59 @@ async function login($: EngineInterface): Promise<string> {
   return openLoginWindow($)
 }
 
+const NOTHING_SET_UP = 'Not set up yet: /anki login to sync your decks with AnkiWeb (recommended), or /anki setup to use decks from Anki desktop on this computer.'
+
+// Reviews go straight into a collection on this computer, usually Anki
+// desktop's, with no AnkiWeb: for decks that aren't synced anywhere.
+async function setup($: EngineInterface, path: string): Promise<string> {
+  let target = path
+  if (!target) {
+    const found = await sidecar($, ['local-collections'])
+    const collections = found.ok ? (found.collections as { profile: string; path: string }[]).slice(0, 3) : []
+    if (collections.length === 0) {
+      return 'No Anki desktop collection found here. Run /anki setup <folder>, with the folder that holds your collection.anki2.'
+    }
+    const labels = collections.map(c => `Anki desktop: ${c.profile}`)
+    const choice = await $.ui
+      .ask('Which collection should anki review? You can also type the path to a folder with a collection.anki2.', labels)
+      .catch(() => undefined)
+    if (choice === undefined) return 'Setup cancelled.'
+    target = collections[labels.indexOf(choice)]?.path ?? choice
+  }
+
+  // A held grade belongs to the collection being left.
+  await commit($)
+  const reply = await sidecar($, ['setup', '--collection', target])
+  if (!reply.ok) return `Couldn't use that collection: ${reply.message}`
+  await update($, card, () => null)
+  await setBand($, { status: 'idle', deck: deckChoice ?? '' })
+  if (!(await read($, menu)).isOpen) void dealNext($)
+
+  const where = String(reply.collection)
+  const close = reply.desktopOpen ? ' Anki desktop has it open right now: close it while you review here.' : ' Close Anki desktop while you review here.'
+  return `Reviewing ${where} directly; reviews go straight into it.${close} To sync with AnkiWeb instead, run /anki login.`
+}
+
 async function runCommand($: EngineInterface, args: string): Promise<string> {
   const [sub = 'status', ...rest] = args.trim().split(/\s+/).filter(Boolean)
   switch (sub) {
     case 'login':
       return login($)
+    case 'setup':
+      return setup($, rest.join(' '))
     case 'logout': {
       await commit($)
       await sidecar($, ['logout'])
       await update($, card, () => null)
       await setBand($, { status: 'logged_out', deck: deckChoice ?? '' })
-      return 'Logged out. Your local copy stays until you log in as someone else.'
+      return 'Logged out of AnkiWeb. The synced copy stays here until you log in as someone else.'
     }
     case 'sync':
     case 'download':
     case 'upload': {
       const mode = sub === 'download' ? '--full-download' : sub === 'upload' ? '--full-upload' : ''
       const reply = await sync($, mode)
+      if (reply.ok && reply.result === 'local') return 'Using a local collection, so there is no AnkiWeb sync: Anki desktop syncs it, if you have it log in. /anki login switches to AnkiWeb.'
       return reply.ok ? `AnkiWeb: ${String(reply.result).replace(/_/g, ' ')}` : `Sync failed: ${reply.message}`
     }
     case 'deck': {
@@ -467,13 +504,13 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
       const reply = await sidecar($, ['status'])
       if (!reply.ok) return `Sidecar unavailable: ${reply.message}`
       const c = await read($, counts)
-      const deck = (await chosenDeck($)) ?? 'none picked'
-      return reply.loggedIn
-        ? `AnkiWeb: ${String(reply.username)} · deck ${deck}${c ? ` · ${tally(c) || 'nothing due'}` : ''} · ${unsynced + (pending ? 1 : 0)} unsynced`
-        : 'Not logged in: run /anki login.'
+      const deck = `deck ${(await chosenDeck($)) ?? 'not picked'}${c ? ` · ${tally(c) || 'nothing due'}` : ''}`
+      if (reply.mode === 'local') return `Local collection ${String(reply.collection)}, no AnkiWeb sync · ${deck}`
+      if (reply.mode === 'ankiweb') return `Syncing with AnkiWeb as ${String(reply.username)} · ${deck} · ${unsynced + (pending ? 1 : 0)} reviews to sync`
+      return NOTHING_SET_UP
     }
     default:
-      return 'Usage: /anki [status|login|logout|sync|download|upload|deck [name]]'
+      return 'Usage: /anki [status | login | setup [folder] | deck [name] | sync | download | upload | logout]'
   }
 }
 
@@ -484,8 +521,8 @@ export const register: Register = (on, options) => {
     await $.command
       .register({
         name: 'anki',
-        description: 'AnkiWeb reviews while Claude works',
-        argumentHint: 'status|login|logout|sync|download|upload|deck [name]',
+        description: 'Review Anki cards while Claude works',
+        argumentHint: 'login (AnkiWeb) | setup [folder] (local) | deck [name] | sync | status',
       })
       .catch(() => undefined)
     void sync($)
@@ -505,8 +542,9 @@ export const register: Register = (on, options) => {
     // The login window may have finished since: a sync picks the login up.
     if ((await read($, band)).status === 'logged_out' && !isSyncing) void sync($)
     // A sync can take seconds and deals when it ends; don't hold the turn for it.
+    // Paused for Anki desktop, the check takes a moment: don't hold the turn for it either.
     if ((await read($, card)) === null && !(await read($, menu)).isOpen) {
-      if (isSyncing) void dealNext($)
+      if (isSyncing || (await read($, band)).status === 'desktop_open') void dealNext($)
       else await dealNext($)
     }
 
@@ -577,7 +615,8 @@ export const register: Register = (on, options) => {
 
     if (current === null) {
       if (status === 'syncing') return <Text dimColor>  {title} · syncing with AnkiWeb…</Text>
-      if (status === 'logged_out') return <Text dimColor>  anki · /anki login to review while Claude works</Text>
+      if (status === 'logged_out') return <Text dimColor>  anki · /anki login to sync your decks from AnkiWeb, or /anki setup for local decks</Text>
+      if (status === 'desktop_open') return <Text dimColor>  anki · paused while Anki desktop is open</Text>
       if (status === 'missing') return <Text dimColor>  anki · sidecar unavailable (/anki status)</Text>
       if (status === 'error') return <Text dimColor>  {title} · /anki status for details</Text>
       if (status === 'empty') {

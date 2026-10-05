@@ -46,11 +46,16 @@ The first session downloads the sidecar for your platform from this repo's GitHu
 pinned in [`sidecar.lock`](sidecar.lock). It's about 7 MB, and it is only installed if its SHA-256
 matches the pin. It goes in `bin/` inside the plugin.
 
-Then log in once:
+Then pick where your decks come from:
 
 ```
-/anki login
+/anki login     # sync with AnkiWeb (recommended)
+/anki setup     # or use Anki desktop's decks on this computer, no AnkiWeb
 ```
+
+### Syncing with AnkiWeb: `/anki login`
+
+Reviews sync both ways with AnkiWeb, so they show up in AnkiDroid, AnkiMobile and Anki desktop.
 
 - **If Anki desktop is logged in on this computer**, it offers to reuse that login. No password
   needed: it copies the profile's sync key.
@@ -59,6 +64,18 @@ Then log in once:
   a new tmux or zellij window, or a new tab or window of Terminal, iTerm2, Ghostty, WezTerm, kitty,
   Alacritty or Windows Terminal. In any other terminal, an editor's say, it uses your system's
   default terminal. Over SSH without tmux, the command goes on your clipboard to paste instead.
+
+### Decks on this computer: `/anki setup`
+
+For decks that aren't on AnkiWeb. `/anki setup` lists Anki desktop's profiles to pick from, or
+takes a path: `/anki setup ~/Library/Application Support/Anki2/User 1` (a profile folder, its
+`collection.anki2`, or Anki's data folder if it holds one profile). Reviews go straight into that
+collection, so Anki desktop sees them next time it opens.
+
+This assumes you don't use Anki desktop while you review here. Anki desktop locks its collection
+while it's running, so the plugin pauses then and picks up again once it's closed. Collections
+from an Anki older than 2.1.50 aren't touched, rather than upgraded under it. `/anki login`
+switches back to AnkiWeb.
 
 ### How your password is handled
 
@@ -79,8 +96,9 @@ trust AnkiDroid's. The code is open, and release binaries are pinned by checksum
 | Command | What it does |
 | --- | --- |
 | `/anki` or `/anki status` | Account, deck, what's due, reviews not yet synced |
-| `/anki login` / `logout` | Get or forget the sync key |
-| `/anki sync` | Sync now |
+| `/anki login` / `logout` | Sync with AnkiWeb: log in once, or forget the sync key |
+| `/anki setup [folder]` | Use a collection on this computer instead, with no AnkiWeb |
+| `/anki sync` | Sync with AnkiWeb now |
 | `/anki download` / `upload` | One-way sync, when AnkiWeb asks for one |
 | `/anki deck` | Open the deck menu next time Claude works |
 | `/anki deck <name>` | Switch to a deck by its full name, e.g. `Svensk::Verb` |
@@ -117,7 +135,8 @@ The deck isn't a setting: pick it from the menu, which remembers your choice.
 
 `~/Library/Application Support/anki-claude-mod/` on macOS (`$ANKI_CLAUDE_MOD_DIR` overrides it):
 
-- `collection.anki2`: the sidecar's copy of your collection
+- `collection.anki2`: the sidecar's copy of your collection, synced with AnkiWeb
+- `local.json`: the collection `/anki setup` points at, when you use one
 - `auth.json` (mode 600): your email and AnkiWeb sync key, the way Anki desktop keeps its own
   in `prefs21.db`. The password is never stored. Anything running as you can read this file,
   including Claude if you approve a read of it. `/anki logout` deletes it.

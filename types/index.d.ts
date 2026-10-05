@@ -2,7 +2,7 @@ export type Card = { id: number; kind: 'new' | 'learning' | 'review'; question: 
 export type Counts = { new: number; learning: number; review: number }
 export type DeckRow = Counts & { name: string; level: number }
 export type Band = {
-  status: 'idle' | 'syncing' | 'ready' | 'empty' | 'logged_out' | 'missing' | 'error'
+  status: 'idle' | 'syncing' | 'ready' | 'empty' | 'logged_out' | 'desktop_open' | 'missing' | 'error'
   deck: string
   message?: string
 }

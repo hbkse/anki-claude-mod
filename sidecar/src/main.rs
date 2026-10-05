@@ -89,8 +89,65 @@ fn data_dir() -> PathBuf {
         .join("anki-claude-mod")
 }
 
-fn col_path() -> PathBuf {
+/// The sidecar's own copy, the one it syncs with AnkiWeb.
+fn own_col_path() -> PathBuf {
     data_dir().join("collection.anki2")
+}
+
+fn local_path() -> PathBuf {
+    data_dir().join("local.json")
+}
+
+/// Set by `setup`: a collection on this computer (usually Anki desktop's),
+/// reviewed in place instead of the AnkiWeb copy.
+fn local_collection() -> Option<PathBuf> {
+    #[derive(Deserialize)]
+    struct Local {
+        collection: PathBuf,
+    }
+    let local: Local = serde_json::from_slice(&fs::read(local_path()).ok()?).ok()?;
+    Some(local.collection)
+}
+
+/// Anki desktop's current schema since 2.1.50. A collection on another one is
+/// left alone: opening it would upgrade it under the Anki that owns it.
+const SCHEMA_VERSION: i64 = 18;
+
+/// Checks a local collection before rslib opens it, without changing it.
+fn check_local(path: &std::path::Path) -> std::result::Result<(), Fail> {
+    if !path.is_file() {
+        return Err(fail("local_missing", format!("no collection at {}; run /anki setup again", path.display())));
+    }
+    // Anki desktop keeps its collection open while it runs, and SQLite then
+    // blocks anyone else until it lets go, reads included. So look on a
+    // thread, and take no answer within a moment to mean Anki has it open.
+    let probe_path = path.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let ver = rusqlite::Connection::open_with_flags(&probe_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .and_then(|db| db.query_row("select ver from col", [], |row| row.get::<_, i64>(0)));
+        let _ = tx.send(ver);
+    });
+    // A blocked thread is left behind; the process exits right after.
+    let Ok(ver) = rx.recv_timeout(std::time::Duration::from_millis(500)) else {
+        return Err(desktop_open());
+    };
+    match ver {
+        Ok(SCHEMA_VERSION) => Ok(()),
+        Ok(ver) if ver < SCHEMA_VERSION => Err(fail(
+            "old_collection",
+            "this collection is from an Anki older than 2.1.50; update Anki desktop and open it there once",
+        )),
+        Ok(_) => Err(fail("new_collection", "this collection is from a newer Anki; update anki-claude-mod")),
+        Err(rusqlite::Error::SqliteFailure(e, _)) if matches!(e.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+            Err(desktop_open())
+        }
+        Err(e) => Err(fail("anki", format!("not an Anki collection: {e}"))),
+    }
+}
+
+fn desktop_open() -> Fail {
+    fail("desktop_open", "Anki desktop has this collection open; close it to review here")
 }
 
 fn auth_path() -> PathBuf {
@@ -115,7 +172,14 @@ fn write_auth(auth: &Auth) -> std::result::Result<(), Fail> {
 
 fn open() -> std::result::Result<Collection, Fail> {
     fs::create_dir_all(data_dir()).map_err(|e| fail("io", e.to_string()))?;
-    Ok(CollectionBuilder::new(col_path()).build()?)
+    let Some(local) = local_collection() else {
+        return Ok(CollectionBuilder::new(own_col_path()).build()?);
+    };
+    check_local(&local)?;
+    CollectionBuilder::new(local).build().map_err(|e| match Fail::from(e) {
+        Fail { code: "busy", .. } => desktop_open(),
+        other => other,
+    })
 }
 
 fn runtime() -> tokio::runtime::Runtime {
@@ -163,9 +227,11 @@ fn save_login(username: &str, hkey: String, endpoint: Option<String>) -> std::re
     // A different account's collection must never sync into this one.
     if read_auth().is_some_and(|p| p.username != username) {
         for suffix in ["", "-wal", "-shm"] {
-            let _ = fs::remove_file(format!("{}{suffix}", col_path().display()));
+            let _ = fs::remove_file(format!("{}{suffix}", own_col_path().display()));
         }
     }
+    // Logging in means syncing with AnkiWeb, so stop using a local collection.
+    let _ = fs::remove_file(local_path());
     write_auth(&Auth {
         username: username.to_string(),
         hkey,
@@ -217,10 +283,12 @@ fn login_interactive(endpoint: Option<String>) -> ExitCode {
     };
     let server = endpoint.as_deref().unwrap_or("AnkiWeb (sync.ankiweb.net)");
     println!(
-        "anki-claude-mod: one-time login\n\n\
+        "anki-claude-mod: log in to AnkiWeb to sync your decks (once)\n\n\
          Your email and password go only to {server}, the same way Anki and\n\
          AnkiDroid log in. It answers with a sync key, and that key is all\n\
          anki-claude-mod keeps: your password is not saved anywhere.\n\
+         To use decks from Anki desktop without AnkiWeb, close this window\n\
+         and run /anki setup instead.\n\
          Details: https://github.com/hbkse/anki-claude-mod#how-your-password-is-handled\n"
     );
 
@@ -254,6 +322,62 @@ fn login_interactive(endpoint: Option<String>) -> ExitCode {
         }
     }
     close(ExitCode::FAILURE)
+}
+
+/// `local-collections`: the collection of every Anki desktop profile here.
+fn local_collections() -> Out {
+    let mut out = vec![];
+    if let Some(Ok(entries)) = desktop_dir().map(fs::read_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path().join("collection.anki2");
+            if path.is_file() {
+                out.push(json!({ "profile": entry.file_name().to_string_lossy(), "path": path }));
+            }
+        }
+    }
+    out.sort_by(|a, b| a["profile"].as_str().cmp(&b["profile"].as_str()));
+    Ok(json!({ "collections": out }))
+}
+
+/// `setup --collection PATH`: review that collection in place. PATH is the
+/// collection.anki2 file, its profile folder, or Anki's data folder when it
+/// holds one profile.
+fn setup(path: &str) -> Out {
+    let given = PathBuf::from(path.trim());
+    let path = if given.is_file() {
+        given
+    } else if given.join("collection.anki2").is_file() {
+        given.join("collection.anki2")
+    } else {
+        let profiles: Vec<PathBuf> = fs::read_dir(&given)
+            .map_err(|_| fail("local_missing", format!("no Anki collection at {}", given.display())))?
+            .flatten()
+            .map(|e| e.path().join("collection.anki2"))
+            .filter(|p| p.is_file())
+            .collect();
+        match profiles.as_slice() {
+            [one] => one.clone(),
+            [] => return Err(fail("local_missing", format!("no Anki collection in {}", given.display()))),
+            _ => return Err(fail("choose_profile", "that folder has several profiles; point at one of them")),
+        }
+    };
+    let path = path.canonicalize().map_err(|e| fail("io", e.to_string()))?;
+    // Anki desktop being open only matters when reviewing; setup can go ahead.
+    let is_open = match check_local(&path) {
+        Ok(()) => false,
+        Err(Fail { code: "desktop_open", .. }) => true,
+        Err(other) => return Err(other),
+    };
+    fs::create_dir_all(data_dir()).map_err(|e| fail("io", e.to_string()))?;
+    fs::write(local_path(), serde_json::to_vec_pretty(&json!({ "collection": path })).unwrap())
+        .map_err(|e| fail("io", e.to_string()))?;
+    Ok(json!({ "collection": path, "desktopOpen": is_open }))
+}
+
+/// `setup --reset`: back to the AnkiWeb copy.
+fn setup_reset() -> Out {
+    let _ = fs::remove_file(local_path());
+    Ok(json!({}))
 }
 
 /// Anki desktop's data folder, as aqt/profiles.py finds it.
@@ -342,7 +466,10 @@ fn logout() -> Out {
 
 fn status() -> Out {
     let auth = read_auth();
+    let local = local_collection();
     Ok(json!({
+        "mode": if local.is_some() { "local" } else if auth.is_some() { "ankiweb" } else { "none" },
+        "collection": local,
         "loggedIn": auth.is_some(),
         "username": auth.as_ref().map(|a| a.username.clone()),
         "hasSynced": auth.as_ref().is_some_and(|a| a.has_synced),
@@ -358,6 +485,10 @@ enum Full {
 }
 
 fn sync(full: Full) -> Out {
+    // A local collection syncs through the Anki that owns it, if at all.
+    if local_collection().is_some() {
+        return Ok(json!({ "result": "local" }));
+    }
     let mut auth = read_auth().ok_or_else(|| fail("logged_out", "run /anki login first"))?;
     let rt = runtime();
     let mut col = open()?;
@@ -590,6 +721,12 @@ fn run(args: &[String]) -> Out {
             None => login(),
         },
         Some("desktop-logins") => list_desktop_logins(),
+        Some("local-collections") => local_collections(),
+        Some("setup") => match flag(args, "--collection") {
+            Some(path) => setup(&path),
+            None if args.iter().any(|a| a == "--reset") => setup_reset(),
+            None => Err(fail("usage", "setup --collection PATH | setup --reset")),
+        },
         Some("logout") => logout(),
         Some("status") => status(),
         Some("sync") => sync(if args.iter().any(|a| a == "--full-download") {
@@ -600,6 +737,16 @@ fn run(args: &[String]) -> Out {
             Full::No
         }),
         Some("decks") => decks(),
+        // Debug builds only: holds the collection open the way Anki desktop does.
+        #[cfg(debug_assertions)]
+        Some("hold") => {
+            let col = open()?;
+            let mut col = col;
+            col.get_or_create_normal_deck("held")?;
+            std::thread::sleep(std::time::Duration::from_secs(flag(args, "--secs").and_then(|s| s.parse().ok()).unwrap_or(3)));
+            col.close(None)?;
+            Ok(json!({}))
+        }
         #[cfg(debug_assertions)]
         Some("seed") => seed(
             args.get(1).map(String::as_str).unwrap_or("3"),
@@ -617,7 +764,7 @@ fn run(args: &[String]) -> Out {
         }
         _ => Err(fail(
             "usage",
-            "commands: login, desktop-logins, logout, status, sync, decks, next, answer",
+            "commands: login, desktop-logins, local-collections, setup, logout, status, sync, decks, next, answer",
         )),
     }
 }
