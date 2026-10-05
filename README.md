@@ -46,7 +46,7 @@ Manual updates: `/plugin` → **Installed** → `anki` → **Update now**
 
 ## AnkiWeb password information
 
-To sync with AnkiWeb, we need to fetch a sync key. If you already have a sync key from Anki Desktop on the same computer, the plugin should detect that and ask if you want to use that. Otherwise you'll need to provide your email and password. When you run `/anki login`, it'll ask to launch a separate terminal for you to input those. This is so other Claude Code plugins can't read it. Your email and password is not saved anywhere, only the sync key.
+To sync with AnkiWeb, we need to fetch a sync key. If you already have a sync key from Anki Desktop on the same computer, the plugin should detect that and ask if you want to use that. Otherwise you'll need to provide your email and password. When you run `/anki login`, it'll ask to launch a separate terminal for you to input those. This is so other Claude Code plugins can't read it. Your password is not saved anywhere, only the email and sync key.
 
 ## Settings
 
