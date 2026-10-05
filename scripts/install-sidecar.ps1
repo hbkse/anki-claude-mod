@@ -1,10 +1,10 @@
 # Windows counterpart of install-sidecar.sh: installs the anki-claude-mod-sidecar
-# release pinned in sidecar.lock into bin\ beside the plugin, checking it
+# release pinned in sidecar.lock into helper\ beside the plugin, checking it
 # against the pinned SHA-256, and prints one JSON line.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $root = Split-Path -Parent $PSScriptRoot
-$binDir = Join-Path $root 'bin'
+$binDir = Join-Path $root 'helper'
 $bin = Join-Path $binDir 'anki-claude-mod-sidecar.exe'
 $lock = Join-Path $root 'sidecar.lock'
 
@@ -35,7 +35,7 @@ $key = 'windows-x64'
 $repo = Field 'repo'
 $version = Field 'version'
 $sha = Field $key
-if (-not $version -or -not $sha) { Fail 'missing' 'no release of anki''s helper yet; build one into bin\ with cargo' }
+if (-not $version -or -not $sha) { Fail 'missing' 'no release of anki''s helper yet; build one into helper\ with cargo' }
 
 if ((Test-Path $bin) -and ((Sha256 $bin) -eq $sha)) { Ok 'release' }
 

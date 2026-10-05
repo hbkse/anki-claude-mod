@@ -10,7 +10,7 @@ const PROPS = {
   scroll: { offset: 0, bodyRows: 11 },
   view: {},
 }
-const BIN = '/plugins/anki/bin/anki-claude-mod-sidecar'
+const BIN = '/plugins/anki/helper/anki-claude-mod-sidecar'
 const DECKS = [
   { name: 'Japanese', level: 1, new: 1, learning: 0, review: 4 },
   { name: 'Svensk', level: 1, new: 5, learning: 0, review: 0 },

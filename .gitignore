@@ -1,6 +1,6 @@
 .claude-plugin/types/
 .claude/types/
-bin/
+helper/
 sidecar/target/
 node_modules/
 .DS_Store

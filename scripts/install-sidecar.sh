@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs the anki-claude-mod-sidecar release pinned in sidecar.lock into bin/
+# Installs the anki-claude-mod-sidecar release pinned in sidecar.lock into helper/
 # beside the plugin, checking it against the pinned SHA-256. The mod runs it
 # when a session starts; it prints one JSON line, as the sidecar does, and is
 # quick when the right binary is already there.
@@ -8,7 +8,7 @@
 # and tests); the checksum is checked all the same.
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
-bin="$root/bin/anki-claude-mod-sidecar"
+bin="$root/helper/anki-claude-mod-sidecar"
 lock="$root/sidecar.lock"
 
 ok() {
@@ -27,7 +27,7 @@ sha256() {
 }
 
 # A local build (scripts/build-sidecar.sh) wins over any release.
-[ -f "$root/bin/.dev" ] && [ -x "$bin" ] && ok dev
+[ -f "$root/helper/.dev" ] && [ -x "$bin" ] && ok dev
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) key=darwin-arm64 ;;
@@ -46,12 +46,12 @@ sha=$(field "$key")
 
 base=${ANKI_CLAUDE_MOD_RELEASE_URL:-"https://github.com/$repo/releases/download/$version"}
 url="$base/anki-claude-mod-sidecar-$key.gz"
-mkdir -p "$root/bin" || fail io "can't create $root/bin"
+mkdir -p "$root/helper" || fail io "can't create $root/helper"
 tmp="$bin.download.$$"
 trap 'rm -f "$tmp" "$tmp.gz"' EXIT
 
 curl -fsSL --retry 2 --max-time 120 -o "$tmp.gz" "$url" || fail network "couldn't download $url"
 gunzip -c "$tmp.gz" >"$tmp" || fail crash "couldn't unpack $url"
 [ "$(sha256 "$tmp")" = "$sha" ] || fail checksum "the downloaded helper doesn't match its published checksum, so it wasn't installed"
-chmod +x "$tmp" && mv -f "$tmp" "$bin" || fail io "can't install into $root/bin"
+chmod +x "$tmp" && mv -f "$tmp" "$bin" || fail io "can't install into $root/helper"
 ok release

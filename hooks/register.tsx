@@ -118,7 +118,8 @@ async function run($: EngineInterface, argv: string[], timeoutMs: number, stdin?
   }
 }
 
-// Whatever the install script leaves in bin/: a local build, or the release
+// Whatever the install script leaves in helper/ (not bin/, which Claude Code
+// puts on Claude's own PATH): a local build, or the release
 // sidecar.lock pins, downloaded and checked.
 async function locate($: EngineInterface): Promise<Reply> {
   const root = $.plugin.root
