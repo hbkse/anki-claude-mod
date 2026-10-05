@@ -1,0 +1,90 @@
+{
+  "name": "anki-wait",
+  "version": "0.1.0",
+  "description": "Review your AnkiWeb decks above the Claude Code prompt while Claude works. Syncs straight with AnkiWeb through Anki's own Rust core; no Anki desktop or AnkiConnect needed.",
+  "author": {
+    "name": "hbkse"
+  },
+  "license": "AGPL-3.0-or-later",
+  "keywords": [
+    "anki",
+    "ankiweb",
+    "flashcards",
+    "spaced-repetition",
+    "mod"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "ankiwebUsername": {
+      "type": "string",
+      "title": "AnkiWeb email",
+      "description": "The email you sign in to AnkiWeb with. Used by /anki login.",
+      "required": false,
+      "default": ""
+    },
+    "ankiwebPassword": {
+      "type": "string",
+      "title": "AnkiWeb password",
+      "description": "Used once by /anki login to get a sync key, then cleared.",
+      "required": false,
+      "sensitive": true,
+      "default": ""
+    },
+    "syncServer": {
+      "type": "string",
+      "title": "Sync server",
+      "description": "A self-hosted Anki sync server URL. Empty uses AnkiWeb.",
+      "required": false,
+      "default": ""
+    },
+    "deck": {
+      "type": "string",
+      "title": "Deck",
+      "description": "Deck to review, subdecks included. Empty uses the collection's current deck.",
+      "required": false,
+      "default": ""
+    },
+    "sidecarPath": {
+      "type": "string",
+      "title": "Sidecar path",
+      "description": "Path to the anki-wait-sidecar binary. Empty uses bin/ inside the plugin.",
+      "required": false,
+      "default": ""
+    },
+    "showKey": {
+      "type": "string",
+      "title": "Show key",
+      "description": "Digit or lowercase letter that shows the answer.",
+      "required": false,
+      "default": "1"
+    },
+    "againKey": {
+      "type": "string",
+      "title": "Again key",
+      "description": "Key for Again; empty hides the button.",
+      "required": false,
+      "default": "2"
+    },
+    "hardKey": {
+      "type": "string",
+      "title": "Hard key",
+      "description": "Key for Hard; empty hides the button.",
+      "required": false,
+      "default": ""
+    },
+    "goodKey": {
+      "type": "string",
+      "title": "Good key",
+      "description": "Key for Good; empty hides the button.",
+      "required": false,
+      "default": "3"
+    },
+    "easyKey": {
+      "type": "string",
+      "title": "Easy key",
+      "description": "Key for Easy; empty hides the button.",
+      "required": false,
+      "default": "4"
+    }
+  }
+}
