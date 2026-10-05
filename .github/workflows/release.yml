@@ -79,8 +79,12 @@ jobs:
         run: gh release create "$GITHUB_REF_NAME" dist/*.gz sidecar.lock --title "$GITHUB_REF_NAME" --generate-notes
       - name: Pin it on the default branch
         run: |
+          # Installed plugins are cached by version, so the pin carries the
+          # tag's version too, or /plugin update could keep the old lock.
+          jq --arg v "${GITHUB_REF_NAME#v}" '.version = $v' .claude-plugin/plugin.json > plugin.json.tmp
+          mv plugin.json.tmp .claude-plugin/plugin.json
           git config user.name "github-actions[bot]"
           git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
-          git add sidecar.lock
-          git commit -m "Pin sidecar $GITHUB_REF_NAME"
+          git add sidecar.lock .claude-plugin/plugin.json
+          git diff --cached --quiet || git commit -m "Pin sidecar $GITHUB_REF_NAME"
           git push
