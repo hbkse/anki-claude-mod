@@ -263,15 +263,38 @@ fn sync(full: Full) -> Out {
     Ok(json!({ "result": result }))
 }
 
+/// Every deck, depth first as Anki lists them, with what's due in each
+/// (subdecks included, daily limits applied). An empty Default is left out,
+/// as Anki leaves it out.
 fn decks() -> Out {
+    fn walk(node: &anki_proto::decks::DeckTreeNode, path: &str, out: &mut Vec<Value>) {
+        for child in &node.children {
+            let name = if path.is_empty() {
+                child.name.clone()
+            } else {
+                format!("{path}::{}", child.name)
+            };
+            let is_empty_default =
+                child.deck_id == 1 && child.children.is_empty() && child.total_including_children == 0;
+            if !is_empty_default {
+                out.push(json!({
+                    "name": name,
+                    "level": child.level,
+                    "new": child.new_count,
+                    "learning": child.learn_count,
+                    "review": child.review_count,
+                }));
+            }
+            walk(child, &name, out);
+        }
+    }
+
     let mut col = open()?;
-    let names: Vec<String> = col
-        .get_all_normal_deck_names(false)?
-        .into_iter()
-        .map(|(_, name)| name)
-        .collect();
+    let tree = col.deck_tree(Some(TimestampSecs::now()))?;
     col.close(None)?;
-    Ok(json!({ "decks": names }))
+    let mut out = vec![];
+    walk(&tree, "", &mut out);
+    Ok(json!({ "decks": out }))
 }
 
 static ANSWER_RULE: LazyLock<Regex> =
@@ -301,7 +324,7 @@ fn counts(col: &mut Collection) -> std::result::Result<Value, Fail> {
     }))
 }
 
-fn next(deck: Option<String>) -> Out {
+fn next(deck: Option<String>, skip: Option<i64>) -> Out {
     let mut col = open()?;
     if let Some(name) = deck.filter(|n| !n.trim().is_empty()) {
         let id = col
@@ -314,8 +337,10 @@ fn next(deck: Option<String>) -> Out {
     }
     let deck_name = col.get_current_deck()?.human_name();
 
-    let queued = col.get_queued_cards(1, false)?;
-    let card = match queued.cards.first() {
+    // The mod holds the last grade back until the turn ends, so the card it
+    // can still undo is due here too; deal the one after it.
+    let queued = col.get_queued_cards(2, false)?;
+    let card = match queued.cards.iter().find(|q| Some(q.card.id().0) != skip) {
         None => Value::Null,
         Some(q) => {
             let rendered = col.render_existing_card(q.card.id(), false, false)?;
@@ -343,7 +368,7 @@ fn next(deck: Option<String>) -> Out {
     Ok(out)
 }
 
-fn answer(card: i64, rating: &str, ms: u32) -> Out {
+fn answer(card: i64, rating: &str, ms: u32, at: Option<i64>) -> Out {
     let rating = match rating {
         "again" => Rating::Again,
         "hard" => Rating::Hard,
@@ -351,6 +376,13 @@ fn answer(card: i64, rating: &str, ms: u32) -> Out {
         "easy" => Rating::Easy,
         other => return Err(fail("usage", format!("unknown rating {other}"))),
     };
+    // The mod sends when the grade was pressed; it answers later, at the end
+    // of the turn. Anything far off is a bad clock, not a real time.
+    let now = TimestampMillis::now();
+    let answered_at = at
+        .filter(|at| (now.0 - at).abs() < 24 * 60 * 60 * 1000)
+        .map(TimestampMillis)
+        .unwrap_or(now);
     let mut col = open()?;
     let cid = CardId(card);
     // States are computed now, not when the card was dealt, so a card
@@ -367,7 +399,7 @@ fn answer(card: i64, rating: &str, ms: u32) -> Out {
         current_state: states.current,
         new_state,
         rating,
-        answered_at: TimestampMillis::now(),
+        answered_at,
         milliseconds_taken: ms,
         custom_data: None,
         from_queue: true,
@@ -377,11 +409,15 @@ fn answer(card: i64, rating: &str, ms: u32) -> Out {
     Ok(out)
 }
 
-/// Debug builds only: adds N Basic notes to the default deck, for tests.
+/// Debug builds only: adds N Basic notes to DECK (default: Default), for tests.
 #[cfg(debug_assertions)]
-fn seed(n: &str) -> Out {
-    let n: usize = n.parse().map_err(|_| fail("usage", "seed N"))?;
+fn seed(n: &str, deck: Option<&str>) -> Out {
+    let n: usize = n.parse().map_err(|_| fail("usage", "seed N [DECK]"))?;
     let mut col = open()?;
+    let did = match deck {
+        Some(name) => col.get_or_create_normal_deck(name)?.id,
+        None => DeckId(1),
+    };
     let nt = col
         .get_notetype_by_name("Basic")?
         .ok_or_else(|| fail("anki", "no Basic notetype"))?;
@@ -389,7 +425,7 @@ fn seed(n: &str) -> Out {
         let mut note = nt.new_note();
         note.set_field(0, format!("question <b>{i}</b><br>line two"))?;
         note.set_field(1, format!("answer&nbsp;{i} <img src=\"x.png\">"))?;
-        col.add_note(&mut note, DeckId(1))?;
+        col.add_note(&mut note, did)?;
     }
     col.close(None)?;
     Ok(json!({ "added": n }))
@@ -415,15 +451,19 @@ fn run(args: &[String]) -> Out {
         }),
         Some("decks") => decks(),
         #[cfg(debug_assertions)]
-        Some("seed") => seed(args.get(1).map(String::as_str).unwrap_or("3")),
-        Some("next") => next(flag(args, "--deck")),
+        Some("seed") => seed(
+            args.get(1).map(String::as_str).unwrap_or("3"),
+            args.get(2).map(String::as_str),
+        ),
+        Some("next") => next(flag(args, "--deck"), flag(args, "--skip").and_then(|s| s.parse().ok())),
         Some("answer") => {
             let card = flag(args, "--card")
                 .and_then(|c| c.parse().ok())
                 .ok_or_else(|| fail("usage", "answer needs --card ID"))?;
             let rating = flag(args, "--rating").ok_or_else(|| fail("usage", "answer needs --rating"))?;
             let ms = flag(args, "--ms").and_then(|m| m.parse().ok()).unwrap_or(0);
-            answer(card, &rating, ms)
+            let at = flag(args, "--at").and_then(|m| m.parse().ok());
+            answer(card, &rating, ms, at)
         }
         _ => Err(fail(
             "usage",

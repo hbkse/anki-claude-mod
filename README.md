@@ -6,9 +6,10 @@ A Claude Code mod that shows your due Anki cards above the prompt while Claude w
 your reviews straight to AnkiWeb. You don't need Anki desktop or AnkiConnect: it works if you
 mostly study on AnkiDroid or AnkiMobile.
 
-Press `1` to show the answer, then grade it with Anki's keys: `1` again, `2` hard, `3` good,
-`4` easy. The band only appears while a turn is running. When Claude finishes, it hides and
-leaves the prompt alone.
+The first time, it asks which deck to review. After that, press `1` to show the answer, then
+grade it with Anki's keys: `1` again, `2` hard, `3` good, `4` easy. `5` undoes the last grade
+and `0` brings the deck menu back. The band only appears while a turn is running. When Claude
+finishes, it hides and leaves the prompt alone.
 
 ## How it works
 
@@ -62,19 +63,37 @@ downloads your collection.
 | `/anki login` / `logout` | Get or forget the sync key |
 | `/anki sync` | Sync now |
 | `/anki download` / `upload` | One-way sync, when AnkiWeb asks for one |
-| `/anki decks` | List your decks |
+| `/anki deck` | Open the deck menu next time Claude works |
+| `/anki deck <name>` | Switch to a deck by its full name, e.g. `Svensk::Verb` |
 
 Replies come back as toasts, so none of this ends up in the transcript Claude reads.
+
+## Keys
+
+| Key | Card | Deck menu |
+| --- | --- | --- |
+| `1` | Show the answer, then Again | Pick deck 1 on the page |
+| `2`–`4` | Hard, Good, Easy | Pick deck 2–4 |
+| `5` | Undo the last grade | Pick deck 5 |
+| `6`–`8` | | Pick deck 6–8 |
+| `9` | | Next page |
+| `0` | Deck menu | Back to your card |
+
+The keys aren't configurable. They work straight from an empty composer. A second `1` within
+0.4 s of showing the answer is ignored, so a double tap doesn't grade a card you haven't read.
+
+The last grade is held back until your next grade, a sync, a deck switch or the end of the
+session, so undo just forgets it and nothing needs reversing in Anki. If Claude Code is killed
+mid-session, that one grade is lost.
 
 ## Settings
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `deck` | *(empty)* | Deck to review, subdecks included. Empty uses the collection's current deck. |
-| `syncServer` | *(empty)* | A [self-hosted sync server](https://docs.ankiweb.net/sync-server.html) URL instead of AnkiWeb |
+| `ankiwebUsername` / `ankiwebPassword` | | Used once by `/anki login`; the password is then cleared |
+| `syncServer` | `https://sync.ankiweb.net/` | AnkiWeb, or a [self-hosted sync server](https://docs.ankiweb.net/sync-server.html) |
 
-The keys aren't configurable. They work straight from an empty composer, and a second `1` within
-0.4 s of showing the answer is ignored, so a double tap doesn't grade a card you haven't read.
+The deck isn't a setting: pick it from the menu, which remembers your choice.
 
 ## Where things live
 
@@ -86,7 +105,7 @@ The keys aren't configurable. They work straight from an empty composer, and a s
 ## Limits
 
 - Cards are shown as text: images become `[image]` and sounds are dropped. Media isn't synced.
-- Setting `deck` changes the collection's current deck, which syncs like any deck switch.
+- Picking a deck changes the collection's current deck, which syncs like any deck switch.
 - If AnkiWeb asks for a one-way sync (after a note type change, say), the band tells you.
   `/anki download` drops reviews from Claude that haven't synced yet; `/anki upload`
   overwrites AnkiWeb.

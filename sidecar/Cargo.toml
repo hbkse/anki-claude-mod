@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 # Anki's own core (rslib). Pin to a release tag; bump it alongside Anki releases.
 anki = { git = "https://github.com/ankitects/anki.git", tag = "26.09.3", features = ["rustls"] }
+anki_proto = { git = "https://github.com/ankitects/anki.git", tag = "26.09.3" }
 # Must match the versions rslib uses, since we hand it a reqwest::Client.
 reqwest = { version = "0.12.20", default-features = false }
 tokio = { version = "1.45", features = ["rt"] }

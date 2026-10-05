@@ -33,16 +33,9 @@
     "syncServer": {
       "type": "string",
       "title": "Sync server",
-      "description": "A self-hosted Anki sync server URL. Empty uses AnkiWeb.",
+      "description": "AnkiWeb, or the URL of a self-hosted Anki sync server.",
       "required": false,
-      "default": ""
-    },
-    "deck": {
-      "type": "string",
-      "title": "Deck",
-      "description": "Deck to review, subdecks included. Empty uses the collection's current deck.",
-      "required": false,
-      "default": ""
+      "default": "https://sync.ankiweb.net/"
     }
   }
 }

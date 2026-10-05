@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Band, Card, Counts } from '../types'
+import type { Band, Card, Counts, DeckRow, Menu } from '../types'
 
 // The sidecar (sidecar/, Rust over Anki's own core) owns the collection and
 // talks to AnkiWeb. This module only draws the band and runs the sidecar, one
@@ -16,6 +16,9 @@ const GRADES = [
   { name: 'good', key: '3' },
   { name: 'easy', key: '4' },
 ] as const
+const UNDO_KEY = '5'
+const DECKS_KEY = '0'
+const MORE_KEY = '9'
 const GRADE_DELAY_MS = 400
 
 type Grade = (typeof GRADES)[number]
@@ -24,30 +27,38 @@ const SYNC_EVERY_MS = 10 * 60_000
 const SYNC_TIMEOUT_MS = 120_000
 const CALL_TIMEOUT_MS = 15_000
 const INSTALL_TIMEOUT_MS = 180_000
+const ANKIWEB = 'https://sync.ankiweb.net/'
 
 const card = atom({ plugin: 'anki', key: 'card' } as const, null)
 const isRevealed = atom({ plugin: 'anki', key: 'isRevealed' } as const, false)
 const band = atom({ plugin: 'anki', key: 'band' } as const, { status: 'idle', deck: '' })
 const counts = atom({ plugin: 'anki', key: 'counts' } as const, null)
+const menu = atom({ plugin: 'anki', key: 'menu' } as const, { isOpen: false, page: 0, decks: [] })
+const undoable = atom({ plugin: 'anki', key: 'undoable' } as const, null)
 
 type Settings = {
   ankiwebUsername: string
   ankiwebPassword: string
   syncServer: string
-  deck: string
 }
 
 export type Reply = { ok: true; [key: string]: unknown } | { ok: false; code: string; message: string }
 
+// A grade is held back until the next one, a sync or a deck change, so that
+// undo only has to forget it: nothing is written to Anki and then reversed.
+type Pending = { card: Card; grade: Grade; ms: number; at: number }
+
 let settings: Settings = {
   ankiwebUsername: '',
   ankiwebPassword: '',
-  syncServer: '',
-  deck: '',
+  syncServer: ANKIWEB,
 }
 let calls: Promise<unknown> = Promise.resolve()
 let binPath: string | null = null
 let dealing: Promise<void> | null = null
+let pending: Pending | null = null
+/** The deck being reviewed: undefined until read from the store, null when none is picked. */
+let deckChoice: string | null | undefined
 let shownAt = 0
 let revealedAt = 0
 let lastSyncAt = 0
@@ -70,6 +81,23 @@ export function parseReply(stdout: string, stderr: string): Reply {
   } catch {}
 
   return { ok: false, code: 'crash', message: (stderr || stdout).trim().slice(0, 300) || 'no output' }
+}
+
+// AnkiWeb's own address means "no custom server", as the official clients
+// treat it, so redirects to the account's shard work as they do there.
+export function syncEndpoint(url: string): string | undefined {
+  const value = url.trim()
+  if (!value || value.replace(/\/+$/, '') === ANKIWEB.replace(/\/+$/, '')) return undefined
+
+  return value
+}
+
+/** The rows on `page` of the deck menu, at most `size`, and how many pages there are. */
+export function menuPage(decks: readonly DeckRow[], page: number, size: number): { rows: DeckRow[]; page: number; pages: number } {
+  const pages = Math.max(1, Math.ceil(decks.length / size))
+  const at = ((page % pages) + pages) % pages
+
+  return { rows: decks.slice(at * size, at * size + size), page: at, pages }
 }
 
 async function run($: EngineInterface, argv: string[], timeoutMs: number, stdin?: string): Promise<Reply> {
@@ -109,8 +137,13 @@ function sidecar($: EngineInterface, args: string[], init: { stdin?: string; tim
   return call
 }
 
-function deckName(): string {
-  return settings.deck.trim()
+async function chosenDeck($: EngineInterface): Promise<string | null> {
+  if (deckChoice === undefined) {
+    const stored = await $.store.get('deck').catch(() => undefined)
+    deckChoice = typeof stored === 'string' && stored !== '' ? stored : null
+  }
+
+  return deckChoice
 }
 
 async function setBand($: EngineInterface, next: Band): Promise<void> {
@@ -124,14 +157,46 @@ async function failed($: EngineInterface, reply: Extract<Reply, { ok: false }>):
     reply.code === 'logged_out' || reply.code === 'auth' ? 'logged_out'
     : ['missing', 'unsupported', 'checksum'].includes(reply.code) ? 'missing'
     : 'error'
-  await setBand($, { status, deck: deckName(), message: reply.message })
+  await setBand($, { status, deck: deckChoice ?? '', message: reply.message })
   await update($, card, () => null)
 }
 
-async function deal($: EngineInterface): Promise<void> {
-  const deck = deckName()
-  const reply = await sidecar($, deck ? ['next', '--deck', deck] : ['next'])
+async function openMenu($: EngineInterface): Promise<void> {
+  const reply = await sidecar($, ['decks'])
   if (!reply.ok) return failed($, reply)
+  await update($, menu, (): Menu => ({ isOpen: true, page: 0, decks: reply.decks as DeckRow[] }))
+}
+
+async function closeMenu($: EngineInterface): Promise<void> {
+  await update($, menu, m => ({ ...m, isOpen: false }))
+}
+
+async function pickDeck($: EngineInterface, name: string): Promise<void> {
+  // A held grade belongs to the old deck; settle it before switching.
+  await commit($)
+  deckChoice = name
+  await $.store.set('deck', name).catch(() => undefined)
+  await closeMenu($)
+  await update($, card, () => null)
+  await dealNext($)
+}
+
+async function deal($: EngineInterface): Promise<void> {
+  const deck = await chosenDeck($)
+  if (deck === null) return openMenu($)
+
+  const args = ['next', '--deck', deck]
+  if (pending) args.push('--skip', String(pending.card.id))
+  const reply = await sidecar($, args)
+  if (!reply.ok) {
+    // Renamed or deleted on another device: ask again.
+    if (reply.code === 'no_deck') {
+      deckChoice = null
+      await $.store.delete('deck').catch(() => undefined)
+      return openMenu($)
+    }
+    return failed($, reply)
+  }
 
   const next = reply.card as Card | null
   await update($, counts, (): Counts => reply.counts as Counts)
@@ -149,8 +214,24 @@ function dealNext($: EngineInterface): Promise<void> {
   return dealing
 }
 
+/** Writes the held grade to Anki; after this it can't be undone. */
+async function commit($: EngineInterface): Promise<void> {
+  const held = pending
+  if (held === null) return
+  pending = null
+  await update($, undoable, () => null)
+
+  const reply = await sidecar($, [
+    'answer', '--card', String(held.card.id), '--rating', held.grade.name,
+    '--ms', String(held.ms), '--at', String(held.at),
+  ])
+  if (!reply.ok) return failed($, reply)
+  unsynced++
+}
+
 async function sync($: EngineInterface, mode: '' | '--full-download' | '--full-upload' = ''): Promise<Reply> {
-  if ((await read($, card)) === null) await setBand($, { status: 'syncing', deck: deckName() })
+  await commit($)
+  if ((await read($, card)) === null) await setBand($, { status: 'syncing', deck: deckChoice ?? '' })
   isSyncing = true
   const reply = await sidecar($, mode ? ['sync', mode] : ['sync'], { timeoutMs: SYNC_TIMEOUT_MS }).finally(() => {
     isSyncing = false
@@ -189,11 +270,21 @@ async function answer($: EngineInterface, shown: Card, grade: Grade): Promise<vo
   })
   if (!isClaimed) return
 
-  const ms = Math.max(0, Math.min(now - shownAt, MAX_ANSWER_MS))
-  const reply = await sidecar($, ['answer', '--card', String(shown.id), '--rating', grade.name, '--ms', String(ms)])
-  if (!reply.ok) return failed($, reply)
-  unsynced++
+  // Only one grade is held: the one before this becomes final now.
+  await commit($)
+  pending = { card: shown, grade, ms: Math.max(0, Math.min(now - shownAt, MAX_ANSWER_MS)), at: now }
+  await update($, undoable, () => shown)
   await dealNext($)
+}
+
+async function undo($: EngineInterface): Promise<void> {
+  const held = pending
+  if (held === null) return
+  pending = null
+  await update($, undoable, () => null)
+  await update($, isRevealed, () => false)
+  await update($, card, () => held.card)
+  shownAt = await $.clock.now()
 }
 
 async function login($: EngineInterface): Promise<string> {
@@ -202,7 +293,7 @@ async function login($: EngineInterface): Promise<string> {
     return 'Set your AnkiWeb email and password in /config (anki), then run /anki login.'
   }
   const reply = await sidecar($, ['login'], {
-    stdin: JSON.stringify({ username, password: settings.ankiwebPassword, endpoint: settings.syncServer.trim() || undefined }),
+    stdin: JSON.stringify({ username, password: settings.ankiwebPassword, endpoint: syncEndpoint(settings.syncServer) }),
     timeoutMs: SYNC_TIMEOUT_MS,
   })
   if (!reply.ok) return `Login failed: ${reply.message}`
@@ -215,14 +306,15 @@ async function login($: EngineInterface): Promise<string> {
 }
 
 async function runCommand($: EngineInterface, args: string): Promise<string> {
-  const [sub = 'status'] = args.trim().split(/\s+/).filter(Boolean)
+  const [sub = 'status', ...rest] = args.trim().split(/\s+/).filter(Boolean)
   switch (sub) {
     case 'login':
       return login($)
     case 'logout': {
+      await commit($)
       await sidecar($, ['logout'])
       await update($, card, () => null)
-      await setBand($, { status: 'logged_out', deck: deckName() })
+      await setBand($, { status: 'logged_out', deck: deckChoice ?? '' })
       return 'Logged out. Your local copy stays until you log in as someone else.'
     }
     case 'sync':
@@ -232,20 +324,26 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
       const reply = await sync($, mode)
       return reply.ok ? `AnkiWeb: ${String(reply.result).replace(/_/g, ' ')}` : `Sync failed: ${reply.message}`
     }
-    case 'decks': {
-      const reply = await sidecar($, ['decks'])
-      return reply.ok ? (reply.decks as string[]).join('\n') : `Couldn't list decks: ${reply.message}`
+    case 'deck': {
+      const name = rest.join(' ')
+      if (name) {
+        await pickDeck($, name)
+        return `Reviewing ${name}.`
+      }
+      await openMenu($)
+      return 'Pick a deck in the band above the prompt while Claude works (0 opens it any time).'
     }
     case 'status': {
       const reply = await sidecar($, ['status'])
       if (!reply.ok) return `Sidecar unavailable: ${reply.message}`
       const c = await read($, counts)
+      const deck = (await chosenDeck($)) ?? 'none picked'
       return reply.loggedIn
-        ? `AnkiWeb: ${String(reply.username)} · deck ${deckName() || '(current)'}${c ? ` · ${tally(c) || 'nothing due'}` : ''} · ${unsynced} unsynced`
+        ? `AnkiWeb: ${String(reply.username)} · deck ${deck}${c ? ` · ${tally(c) || 'nothing due'}` : ''} · ${unsynced + (pending ? 1 : 0)} unsynced`
         : 'Not logged in. Set your AnkiWeb email and password in /config, then /anki login.'
     }
     default:
-      return 'Usage: /anki [status|login|logout|sync|download|upload|decks]'
+      return 'Usage: /anki [status|login|logout|sync|download|upload|deck [name]]'
   }
 }
 
@@ -257,7 +355,7 @@ export const register: Register = (on, options) => {
       .register({
         name: 'anki',
         description: 'AnkiWeb reviews while Claude works',
-        argumentHint: 'status|login|logout|sync|download|upload|decks',
+        argumentHint: 'status|login|logout|sync|download|upload|deck [name]',
       })
       .catch(() => undefined)
     void sync($)
@@ -275,7 +373,7 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     // A sync can take seconds and deals when it ends; don't hold the turn for it.
-    if ((await read($, card)) === null) {
+    if ((await read($, card)) === null && !(await read($, menu)).isOpen) {
       if (isSyncing) void dealNext($)
       else await dealNext($)
     }
@@ -284,13 +382,14 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined && unsynced > 0 && (await $.clock.now()) - lastSyncAt > SYNC_EVERY_MS) void sync($)
+    const hasWork = unsynced > 0 || pending !== null
+    if (e.agentId === undefined && hasWork && (await $.clock.now()) - lastSyncAt > SYNC_EVERY_MS) void sync($)
 
     return next(e)
   })
 
   on('session.end', async ($, e, next) => {
-    if (unsynced > 0) await sync($)
+    if (unsynced > 0 || pending !== null) await sync($)
 
     return next(e)
   })
@@ -299,52 +398,89 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey || !e.props.isWorking) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
+    const width = Math.min(e.props.bodyColumns, 72)
+    const picker = await read($, menu)
+    const held = await read($, undoable)
+
+    if (picker.isOpen) {
+      // Border, title and footer take 4 rows; digits 1-8 pick, 9 pages on.
+      const size = Math.max(1, Math.min(8, e.props.maxRows - 4))
+      const { rows, page, pages } = menuPage(picker.decks, picker.page, size)
+      const canGoBack = deckChoice !== null && deckChoice !== undefined
+
+      return (
+        <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} width={width}>
+          <Box justifyContent="space-between">
+            <Text color="cyan" bold>pick a deck</Text>
+            <Text dimColor>{pages > 1 ? `${page + 1}/${pages}` : ''}</Text>
+          </Box>
+          {rows.length === 0
+            ? <Text dimColor>no decks yet · /anki login, or /anki sync</Text>
+            : rows.map((row, i) => (
+              <Box key={row.name} gap={1}>
+                <Button
+                  key={`deck-${i + 1}`}
+                  hotkey={String(i + 1)}
+                  plain
+                  label={`${'  '.repeat(Math.max(0, row.level - 1))}${row.name.split('::').at(-1)}`}
+                  onPress={() => pickDeck($, row.name)}
+                />
+                <Text dimColor>{tally(row)}</Text>
+              </Box>
+            ))}
+          <Box gap={2}>
+            {pages > 1 && <Button key="more" hotkey={MORE_KEY} plain label="more" onPress={() => update($, menu, m => ({ ...m, page: page + 1 }))} />}
+            {canGoBack && <Button key="back" hotkey={DECKS_KEY} plain label="back" onPress={() => closeMenu($)} />}
+          </Box>
+        </Box>
+      )
+    }
+
     const current = await read($, card)
     const { status, deck } = await read($, band)
     const c = await read($, counts)
     const title = deck || 'anki'
+    const undoButton = held && <Button key="undo" hotkey={UNDO_KEY} plain label="undo" onPress={() => undo($)} />
+    const decksButton = <Button key="decks" hotkey={DECKS_KEY} plain label="decks" onPress={() => openMenu($)} />
 
     if (current === null) {
       if (status === 'syncing') return <Text dimColor>  {title} · syncing with AnkiWeb…</Text>
       if (status === 'logged_out') return <Text dimColor>  anki · /anki login to review while Claude works</Text>
       if (status === 'missing') return <Text dimColor>  anki · sidecar unavailable (/anki status)</Text>
       if (status === 'error') return <Text dimColor>  {title} · /anki status for details</Text>
-      if (status === 'empty') return <Text dimColor>  {title} · nothing due ✓</Text>
+      if (status === 'empty') {
+        return (
+          <Box gap={2}>
+            <Text dimColor>  {title} · nothing due ✓</Text>
+            {undoButton}
+            {decksButton}
+          </Box>
+        )
+      }
       return next(e)
     }
 
     const shown = await read($, isRevealed)
 
     return (
-      <Box
-        flexDirection="column"
-        borderStyle="round"
-        borderColor="cyan"
-        paddingX={1}
-        width={Math.min(e.props.bodyColumns, 72)}
-      >
+      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} width={width}>
         <Box justifyContent="space-between">
           <Text color="cyan" bold>{title}</Text>
           <Text dimColor>{c ? tally(c) : ''}</Text>
         </Box>
         <Text bold color="yellow">{current.question || '(empty)'}</Text>
         {shown
-          ? (
-            <Box flexDirection="column">
-              <Text>→ {current.answer || '(empty)'}</Text>
-              <Box gap={2}>
-                {GRADES.map(grade => (
-                  <Button key={grade.name} hotkey={grade.key} plain label={grade.name} onPress={() => answer($, current, grade)} />
-                ))}
-              </Box>
-            </Box>
-          )
-          : (
-            <Box gap={2}>
-              <Text dimColor>→ ···</Text>
-              <Button key="show" hotkey={SHOW_KEY} plain label="show" onPress={() => reveal($)} />
-            </Box>
-          )}
+          ? <Text>→ {current.answer || '(empty)'}</Text>
+          : <Text dimColor>→ ···</Text>}
+        <Box gap={2}>
+          {shown
+            ? GRADES.map(grade => (
+              <Button key={grade.name} hotkey={grade.key} plain label={grade.name} onPress={() => answer($, current, grade)} />
+            ))
+            : <Button key="show" hotkey={SHOW_KEY} plain label="show" onPress={() => reveal($)} />}
+          {undoButton}
+          {decksButton}
+        </Box>
       </Box>
     )
   })
