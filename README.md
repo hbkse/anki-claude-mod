@@ -33,7 +33,7 @@ cover macOS (Apple Silicon, Intel), Linux (x64, arm64) and Windows (x64).
 ## Install
 
 ```
-/plugin marketplace add hbkse/anki-wait
+/plugin marketplace add hbkse/anki-claude-mod
 /plugin install anki-wait@anki-wait
 /reload-plugins
 ```
