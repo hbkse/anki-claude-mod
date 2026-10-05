@@ -170,12 +170,25 @@ fn write_auth(auth: &Auth) -> std::result::Result<(), Fail> {
     Ok(())
 }
 
+/// The local collection when it's the one in use: AnkiWeb, once logged in,
+/// takes priority over it.
+fn active_local() -> Option<PathBuf> {
+    if read_auth().is_some() {
+        return None;
+    }
+    local_collection()
+}
+
 fn open() -> std::result::Result<Collection, Fail> {
     fs::create_dir_all(data_dir()).map_err(|e| fail("io", e.to_string()))?;
-    let Some(local) = local_collection() else {
+    let Some(local) = active_local() else {
         return Ok(CollectionBuilder::new(own_col_path()).build()?);
     };
-    check_local(&local)?;
+    open_local(&local)
+}
+
+fn open_local(local: &std::path::Path) -> std::result::Result<Collection, Fail> {
+    check_local(local)?;
     CollectionBuilder::new(local).build().map_err(|e| match Fail::from(e) {
         Fail { code: "busy", .. } => desktop_open(),
         other => other,
@@ -230,8 +243,6 @@ fn save_login(username: &str, hkey: String, endpoint: Option<String>) -> std::re
             let _ = fs::remove_file(format!("{}{suffix}", own_col_path().display()));
         }
     }
-    // Logging in means syncing with AnkiWeb, so stop using a local collection.
-    let _ = fs::remove_file(local_path());
     write_auth(&Auth {
         username: username.to_string(),
         hkey,
@@ -371,7 +382,48 @@ fn setup(path: &str) -> Out {
     fs::create_dir_all(data_dir()).map_err(|e| fail("io", e.to_string()))?;
     fs::write(local_path(), serde_json::to_vec_pretty(&json!({ "collection": path })).unwrap())
         .map_err(|e| fail("io", e.to_string()))?;
-    Ok(json!({ "collection": path, "desktopOpen": is_open }))
+    Ok(json!({ "collection": path, "desktopOpen": is_open, "ankiwebActive": read_auth().is_some() }))
+}
+
+/// `compare`: how the local collection's decks differ from the AnkiWeb copy's,
+/// by name and card count, when both are set up. AnkiWeb's are the ones used.
+fn compare() -> Out {
+    fn cards_by_deck(col: &mut Collection) -> std::result::Result<std::collections::BTreeMap<String, u32>, Fail> {
+        fn walk(node: &anki_proto::decks::DeckTreeNode, path: &str, out: &mut std::collections::BTreeMap<String, u32>) {
+            for child in &node.children {
+                let name = if path.is_empty() { child.name.clone() } else { format!("{path}::{}", child.name) };
+                // An empty Default is no deck to anyone.
+                if !(child.deck_id == 1 && child.total_including_children == 0) {
+                    out.insert(name.clone(), child.total_in_deck);
+                }
+                walk(child, &name, out);
+            }
+        }
+        let mut out = std::collections::BTreeMap::new();
+        walk(&col.deck_tree(Some(TimestampSecs::now()))?, "", &mut out);
+        Ok(out)
+    }
+
+    let (Some(_), Some(local)) = (read_auth(), local_collection()) else {
+        return Ok(json!({ "differs": false }));
+    };
+    let mut col = open_local(&local)?;
+    let here = cards_by_deck(&mut col)?;
+    col.close(None)?;
+    let mut col = CollectionBuilder::new(own_col_path()).build()?;
+    let synced = cards_by_deck(&mut col)?;
+    col.close(None)?;
+
+    let only_local: Vec<&String> = here.keys().filter(|d| !synced.contains_key(*d)).collect();
+    let only_ankiweb: Vec<&String> = synced.keys().filter(|d| !here.contains_key(*d)).collect();
+    let changed: Vec<&String> = here.iter().filter(|(d, n)| synced.get(*d).is_some_and(|m| m != *n)).map(|(d, _)| d).collect();
+    Ok(json!({
+        "differs": !(only_local.is_empty() && only_ankiweb.is_empty() && changed.is_empty()),
+        "collection": local,
+        "onlyLocal": only_local,
+        "onlyAnkiweb": only_ankiweb,
+        "changed": changed,
+    }))
 }
 
 /// `setup --reset`: back to the AnkiWeb copy.
@@ -468,7 +520,7 @@ fn status() -> Out {
     let auth = read_auth();
     let local = local_collection();
     Ok(json!({
-        "mode": if local.is_some() { "local" } else if auth.is_some() { "ankiweb" } else { "none" },
+        "mode": if auth.is_some() { "ankiweb" } else if local.is_some() { "local" } else { "none" },
         "collection": local,
         "loggedIn": auth.is_some(),
         "username": auth.as_ref().map(|a| a.username.clone()),
@@ -486,7 +538,7 @@ enum Full {
 
 fn sync(full: Full) -> Out {
     // A local collection syncs through the Anki that owns it, if at all.
-    if local_collection().is_some() {
+    if active_local().is_some() {
         return Ok(json!({ "result": "local" }));
     }
     let mut auth = read_auth().ok_or_else(|| fail("logged_out", "run /anki login first"))?;
@@ -722,6 +774,7 @@ fn run(args: &[String]) -> Out {
         },
         Some("desktop-logins") => list_desktop_logins(),
         Some("local-collections") => local_collections(),
+        Some("compare") => compare(),
         Some("setup") => match flag(args, "--collection") {
             Some(path) => setup(&path),
             None if args.iter().any(|a| a == "--reset") => setup_reset(),

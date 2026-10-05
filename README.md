@@ -46,12 +46,16 @@ The first session downloads the sidecar for your platform from this repo's GitHu
 pinned in [`sidecar.lock`](sidecar.lock). It's about 7 MB, and it is only installed if its SHA-256
 matches the pin. It goes in `bin/` inside the plugin.
 
-Then pick where your decks come from:
+Then pick where your decks come from (`/anki` on its own says the same):
 
 ```
 /anki login     # sync with AnkiWeb (recommended)
 /anki setup     # or use Anki desktop's decks on this computer, no AnkiWeb
 ```
+
+If you set up both, AnkiWeb comes first: anki reviews AnkiWeb's decks, and warns you when the
+local collection's decks differ from them (decks only one side has, or different card counts).
+The local collection is used again after `/anki logout`.
 
 ### Syncing with AnkiWeb: `/anki login`
 
@@ -59,7 +63,7 @@ Reviews sync both ways with AnkiWeb, so they show up in AnkiDroid, AnkiMobile an
 
 - **If Anki desktop is logged in on this computer**, it offers to reuse that login. No password
   needed: it copies the profile's sync key.
-- **Otherwise it opens a terminal window** that explains the login and asks for your AnkiWeb email
+- **Otherwise, after asking, it opens a terminal window outside Claude Code** that explains the login and asks for your AnkiWeb email
   and password, with the password hidden. It opens in the terminal you're running Claude Code in:
   a new tmux or zellij window, or a new tab or window of Terminal, iTerm2, Ghostty, WezTerm, kitty,
   Alacritty or Windows Terminal. In any other terminal, an editor's say, it uses your system's
@@ -70,7 +74,8 @@ Reviews sync both ways with AnkiWeb, so they show up in AnkiDroid, AnkiMobile an
 For decks that aren't on AnkiWeb. `/anki setup` lists Anki desktop's profiles to pick from, or
 takes a path: `/anki setup ~/Library/Application Support/Anki2/User 1` (a profile folder, its
 `collection.anki2`, or Anki's data folder if it holds one profile). Reviews go straight into that
-collection, so Anki desktop sees them next time it opens.
+collection, so Anki desktop sees them next time it opens. While you're logged in to AnkiWeb,
+the setup is saved but AnkiWeb's decks are used.
 
 This assumes you don't use Anki desktop while you review here. Anki desktop locks its collection
 while it's running, so the plugin pauses then and picks up again once it's closed. Collections
