@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { menuPage, parseReply, syncEndpoint, tally } from '../hooks/register'
+import { appleScriptString, menuPage, parseReply, shellQuote, syncEndpoint, tally } from '../hooks/register'
 
 const PROPS = {
   hasSurvey: false,
@@ -351,5 +351,10 @@ describe('helpers', () => {
     expect(menuPage(decks, 1, 8).rows.map(d => d.name)).toEqual(['d8', 'd9'])
     expect(menuPage(decks, 2, 8).page).toBe(0)
     expect(menuPage([], 0, 8)).toEqual({ rows: [], page: 0, pages: 1 })
+  })
+
+  test('quotes the login command for sh and AppleScript', async () => {
+    expect(shellQuote("/Users/me/it's here/sidecar")).toBe("'/Users/me/it'\\''s here/sidecar'")
+    expect(appleScriptString('\'/a b/c\' "x" \\')).toBe('"\'/a b/c\' \\"x\\" \\\\"')
   })
 })

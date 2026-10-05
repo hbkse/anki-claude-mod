@@ -21,6 +21,11 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 dirs = "6.0.0"
 regex = "1"
+rpassword = "7"
+# Same version as rslib's, so both link the one bundled SQLite.
+rusqlite = "0.36.0"
+# Anki desktop keeps each profile as a pickled dict.
+serde-pickle = "1"
 
 [profile.release]
 opt-level = 3

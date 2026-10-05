@@ -15,21 +15,6 @@
   ],
   "types": "./types/index.d.ts",
   "userConfig": {
-    "ankiwebUsername": {
-      "type": "string",
-      "title": "AnkiWeb email",
-      "description": "The email you sign in to AnkiWeb with. Used by /anki login.",
-      "required": false,
-      "default": ""
-    },
-    "ankiwebPassword": {
-      "type": "string",
-      "title": "AnkiWeb password",
-      "description": "Used once by /anki login to get a sync key, then cleared.",
-      "required": false,
-      "sensitive": true,
-      "default": ""
-    },
     "syncServer": {
       "type": "string",
       "title": "Sync server",

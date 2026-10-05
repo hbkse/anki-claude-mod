@@ -37,8 +37,6 @@ const menu = atom({ plugin: 'anki', key: 'menu' } as const, { isOpen: false, pag
 const undoable = atom({ plugin: 'anki', key: 'undoable' } as const, null)
 
 type Settings = {
-  ankiwebUsername: string
-  ankiwebPassword: string
   syncServer: string
 }
 
@@ -49,8 +47,6 @@ export type Reply = { ok: true; [key: string]: unknown } | { ok: false; code: st
 type Pending = { card: Card; grade: Grade; ms: number; at: number }
 
 let settings: Settings = {
-  ankiwebUsername: '',
-  ankiwebPassword: '',
   syncServer: ANKIWEB,
 }
 let calls: Promise<unknown> = Promise.resolve()
@@ -231,7 +227,9 @@ async function commit($: EngineInterface): Promise<void> {
 
 async function sync($: EngineInterface, mode: '' | '--full-download' | '--full-upload' = ''): Promise<Reply> {
   await commit($)
-  if ((await read($, card)) === null) await setBand($, { status: 'syncing', deck: deckChoice ?? '' })
+  // Logged out, keep saying so until a sync proves otherwise.
+  const { status } = await read($, band)
+  if ((await read($, card)) === null && status !== 'logged_out') await setBand($, { status: 'syncing', deck: deckChoice ?? '' })
   isSyncing = true
   const reply = await sidecar($, mode ? ['sync', mode] : ['sync'], { timeoutMs: SYNC_TIMEOUT_MS }).finally(() => {
     isSyncing = false
@@ -287,22 +285,82 @@ async function undo($: EngineInterface): Promise<void> {
   shownAt = await $.clock.now()
 }
 
-async function login($: EngineInterface): Promise<string> {
-  const username = settings.ankiwebUsername.trim()
-  if (!username || !settings.ankiwebPassword) {
-    return 'Set your AnkiWeb email and password in /config (anki), then run /anki login.'
+/** Quotes `text` as one word for sh. */
+export function shellQuote(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`
+}
+
+/** Quotes `text` as an AppleScript string. */
+export function appleScriptString(text: string): string {
+  return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+}
+
+// The login happens in a terminal window of its own, so the password goes
+// from the keyboard to the sidecar and AnkiWeb, and never through Claude Code:
+// not its settings, this module, other mods' hooks or the transcript.
+async function openLoginWindow($: EngineInterface): Promise<string> {
+  const found = await sidecar($, ['status'])
+  if (!found.ok || binPath === null) return `Sidecar unavailable: ${found.ok ? 'not installed' : found.message}`
+
+  const endpoint = syncEndpoint(settings.syncServer)
+  const args = ['login', '--interactive', ...(endpoint ? ['--endpoint', endpoint] : [])]
+  const dir = await $.env.get('ANKI_CLAUDE_MOD_DIR').catch(() => undefined)
+  const command = [dir ? `ANKI_CLAUDE_MOD_DIR=${shellQuote(dir)}` : '', ...[binPath, ...args].map(shellQuote)]
+    .filter(Boolean)
+    .join(' ')
+  const opened = 'Opened a login window: log in there once, and your cards show up on your next prompt.'
+
+  if ((await $.env.get('OS').catch(() => undefined)) === 'Windows_NT') {
+    const list = args.map(a => `'${a.replace(/'/g, "''")}'`).join(',')
+    const start = `Start-Process -FilePath '${binPath.replace(/'/g, "''")}' -ArgumentList ${list}`
+    const r = await $.process.run(['powershell', '-NoProfile', '-Command', start], { timeoutMs: CALL_TIMEOUT_MS }).catch(() => undefined)
+    if (r?.exitCode === 0) return opened
+  } else {
+    const os = await $.process.run(['uname', '-s'], { timeoutMs: CALL_TIMEOUT_MS }).catch(() => undefined)
+    const argv = os?.stdout.trim() === 'Darwin'
+      ? ['osascript', '-e', `tell application "Terminal" to do script ${appleScriptString(command)}`, '-e', 'tell application "Terminal" to activate']
+      // The first terminal there is, started in the background so this returns.
+      : ['sh', '-c', [
+        '[ -n "$DISPLAY$WAYLAND_DISPLAY" ] || exit 1',
+        'for t in x-terminal-emulator gnome-terminal konsole xfce4-terminal kitty alacritty xterm; do',
+        '  command -v "$t" >/dev/null || continue',
+        '  if [ "$t" = gnome-terminal ]; then set -- "$t" --; else set -- "$t" -e; fi',
+        '  (setsid "$@" sh -c "$CMD" >/dev/null 2>&1 &); exit 0',
+        'done; exit 1',
+      ].join('\n')]
+    const r = await $.process.run(argv, { env: { CMD: command }, timeoutMs: CALL_TIMEOUT_MS }).catch(() => undefined)
+    if (r?.exitCode === 0) return opened
   }
-  const reply = await sidecar($, ['login'], {
-    stdin: JSON.stringify({ username, password: settings.ankiwebPassword, endpoint: syncEndpoint(settings.syncServer) }),
-    timeoutMs: SYNC_TIMEOUT_MS,
-  })
-  if (!reply.ok) return `Login failed: ${reply.message}`
 
-  // The sync key is all we need from here on; don't keep the password around.
-  await $.config.set({ key: 'anki.ankiwebPassword', value: '' }).catch(() => undefined)
-  const synced = await sync($)
+  // No window we can open (SSH, no desktop): hand over the command instead.
+  for (const copy of [['pbcopy'], ['wl-copy'], ['xclip', '-selection', 'clipboard'], ['clip']]) {
+    const r = await $.process.run(copy, { stdin: command, timeoutMs: CALL_TIMEOUT_MS }).catch(() => undefined)
+    if (r?.exitCode === 0) return `Couldn't open a terminal, so the login command is on your clipboard: paste it into any terminal.`
+  }
+  return `Run this in any terminal to log in: ${command}`
+}
 
-  return synced.ok ? `Logged in to AnkiWeb as ${username} and synced.` : `Logged in as ${username}; sync failed: ${synced.message}`
+async function login($: EngineInterface): Promise<string> {
+  // Anki desktop on this computer may already be logged in: its sync key
+  // works here too, and then no password is asked for at all.
+  const found = await sidecar($, ['desktop-logins'])
+  const logins = found.ok ? (found.logins as { profile: string; username: string }[]).slice(0, 3) : []
+  if (logins.length > 0) {
+    const labels = logins.map(l => `Reuse ${l.username || 'its login'}${logins.length > 1 ? ` (profile ${l.profile})` : ''}`)
+    const choice = await $.ui
+      .ask('Anki desktop is logged in to AnkiWeb on this computer. Reuse its login?', [...labels, 'Log in with my password'])
+      .catch(() => undefined)
+    if (choice === undefined) return 'Login cancelled.'
+    const picked = logins[labels.indexOf(choice)]
+    if (picked) {
+      const reply = await sidecar($, ['login', '--from-desktop', picked.profile])
+      if (!reply.ok) return `Couldn't reuse Anki desktop's login: ${reply.message}`
+      const synced = await sync($)
+      return synced.ok ? `Logged in as ${String(reply.username)} with Anki desktop's sync key, and synced.` : `Logged in; sync failed: ${synced.message}`
+    }
+  }
+
+  return openLoginWindow($)
 }
 
 async function runCommand($: EngineInterface, args: string): Promise<string> {
@@ -340,7 +398,7 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
       const deck = (await chosenDeck($)) ?? 'none picked'
       return reply.loggedIn
         ? `AnkiWeb: ${String(reply.username)} · deck ${deck}${c ? ` · ${tally(c) || 'nothing due'}` : ''} · ${unsynced + (pending ? 1 : 0)} unsynced`
-        : 'Not logged in. Set your AnkiWeb email and password in /config, then /anki login.'
+        : 'Not logged in: run /anki login.'
     }
     default:
       return 'Usage: /anki [status|login|logout|sync|download|upload|deck [name]]'
@@ -372,6 +430,8 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.start', async ($, e, next) => {
+    // The login window may have finished since: a sync picks the login up.
+    if ((await read($, band)).status === 'logged_out' && !isSyncing) void sync($)
     // A sync can take seconds and deals when it ends; don't hold the turn for it.
     if ((await read($, card)) === null && !(await read($, menu)).isOpen) {
       if (isSyncing) void dealNext($)

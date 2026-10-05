@@ -148,6 +148,44 @@ fn sync_auth(auth: &Auth) -> std::result::Result<SyncAuth, Fail> {
     })
 }
 
+fn check_endpoint(endpoint: Option<String>) -> std::result::Result<Option<String>, Fail> {
+    let endpoint = endpoint.filter(|e| !e.trim().is_empty());
+    if let Some(url) = &endpoint {
+        url.parse::<reqwest::Url>()
+            .map_err(|_| fail("usage", format!("bad sync server {url}")))?;
+    }
+    Ok(endpoint)
+}
+
+/// Keeps `hkey` as the login, as Anki keeps it: the password is never stored.
+fn save_login(username: &str, hkey: String, endpoint: Option<String>) -> std::result::Result<(), Fail> {
+    fs::create_dir_all(data_dir()).map_err(|e| fail("io", e.to_string()))?;
+    // A different account's collection must never sync into this one.
+    if read_auth().is_some_and(|p| p.username != username) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = fs::remove_file(format!("{}{suffix}", col_path().display()));
+        }
+    }
+    write_auth(&Auth {
+        username: username.to_string(),
+        hkey,
+        endpoint,
+        has_synced: false,
+    })
+}
+
+fn exchange(username: &str, password: String, endpoint: Option<String>) -> Out {
+    let auth = runtime()
+        .block_on(sync_login(username.to_string(), password, endpoint.clone(), client()))
+        .map_err(|e| match Fail::from(e) {
+            Fail { code: "auth", .. } => fail("auth", "AnkiWeb rejected that email or password"),
+            other => other,
+        })?;
+    save_login(username, auth.hkey, endpoint)?;
+    Ok(json!({ "username": username }))
+}
+
+/// `login`: {"username","password","endpoint"?} on stdin, for scripts and tests.
 fn login() -> Out {
     #[derive(Deserialize)]
     struct Credentials {
@@ -162,31 +200,139 @@ fn login() -> Out {
         .map_err(|e| fail("io", e.to_string()))?;
     let creds: Credentials = serde_json::from_str(&input)
         .map_err(|_| fail("usage", "login reads {\"username\",\"password\"} on stdin"))?;
-    let endpoint = creds.endpoint.filter(|e| !e.trim().is_empty());
-    if let Some(url) = &endpoint {
-        url.parse::<reqwest::Url>()
-            .map_err(|_| fail("usage", format!("bad sync server {url}")))?;
-    }
-    let auth = runtime()
-        .block_on(sync_login(creds.username.clone(), creds.password, endpoint.clone(), client()))
-        .map_err(|e| match Fail::from(e) {
-            Fail { code: "auth", .. } => fail("auth", "AnkiWeb rejected that email or password"),
-            other => other,
-        })?;
+    exchange(&creds.username, creds.password, check_endpoint(creds.endpoint)?)
+}
 
-    fs::create_dir_all(data_dir()).map_err(|e| fail("io", e.to_string()))?;
-    // A different account's collection must never sync into this one.
-    let previous = read_auth();
-    if previous.is_some_and(|p| p.username != creds.username) {
-        let _ = fs::remove_file(col_path());
+/// `login --interactive`: the window `/anki login` opens. Asks in the
+/// terminal, the password unechoed, and talks to a person, not the mod.
+fn login_interactive(endpoint: Option<String>) -> ExitCode {
+    use std::io::Write;
+
+    let endpoint = match check_endpoint(endpoint) {
+        Ok(e) => e,
+        Err(Fail { message, .. }) => {
+            eprintln!("{message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let server = endpoint.as_deref().unwrap_or("AnkiWeb (sync.ankiweb.net)");
+    println!(
+        "anki-claude-mod: one-time login\n\n\
+         Your email and password go only to {server}, the same way Anki and\n\
+         AnkiDroid log in. It answers with a sync key, and that key is all\n\
+         anki-claude-mod keeps: your password is not saved anywhere.\n\
+         Source: https://github.com/hbkse/anki-claude-mod/blob/main/sidecar/src/main.rs\n"
+    );
+
+    let close = |code: ExitCode| {
+        print!("\nPress Enter to close this window.");
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stdin().read_line(&mut String::new());
+        code
+    };
+    for _ in 0..3 {
+        print!("AnkiWeb email: ");
+        let _ = std::io::stdout().flush();
+        let mut username = String::new();
+        if std::io::stdin().read_line(&mut username).unwrap_or(0) == 0 {
+            return ExitCode::FAILURE;
+        }
+        let username = username.trim().to_string();
+        let Ok(password) = rpassword::prompt_password("Password (not shown as you type): ") else {
+            return ExitCode::FAILURE;
+        };
+        match exchange(&username, password, endpoint.clone()) {
+            Ok(_) => {
+                println!("\nLogged in as {username}. Back in Claude Code, your cards show up on your next prompt.");
+                return close(ExitCode::SUCCESS);
+            }
+            Err(Fail { code: "auth", message }) => println!("\n{message}. Try again.\n"),
+            Err(Fail { message, .. }) => {
+                println!("\nCouldn't log in: {message}");
+                return close(ExitCode::FAILURE);
+            }
+        }
     }
-    write_auth(&Auth {
-        username: creds.username.clone(),
-        hkey: auth.hkey,
-        endpoint,
-        has_synced: false,
-    })?;
-    Ok(json!({ "username": creds.username }))
+    close(ExitCode::FAILURE)
+}
+
+/// Anki desktop's data folder, as aqt/profiles.py finds it.
+fn desktop_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("ANKI_CLAUDE_MOD_DESKTOP_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    if cfg!(windows) || cfg!(target_os = "macos") {
+        // %APPDATA% and ~/Library/Application Support
+        return dirs::data_dir().map(|d| d.join("Anki2"));
+    }
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
+        .map(|d| d.join("Anki2"))
+}
+
+struct DesktopLogin {
+    profile: String,
+    username: String,
+    hkey: String,
+    endpoint: Option<String>,
+}
+
+/// The logged-in profiles in Anki desktop's prefs21.db: each row's data is a
+/// pickled dict holding syncKey, syncUser and the sync URLs.
+fn desktop_logins() -> Vec<DesktopLogin> {
+    let Some(path) = desktop_dir().map(|d| d.join("prefs21.db")).filter(|p| p.exists()) else {
+        return vec![];
+    };
+    let Ok(db) = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return vec![];
+    };
+    let Ok(mut stmt) = db.prepare("select name, cast(data as blob) from profiles where name != '_global'") else {
+        return vec![];
+    };
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)));
+    let Ok(rows) = rows else { return vec![] };
+
+    let text = |dict: &std::collections::BTreeMap<serde_pickle::HashableValue, serde_pickle::Value>, key: &str| {
+        match dict.get(&serde_pickle::HashableValue::String(key.into())) {
+            Some(serde_pickle::Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            _ => None,
+        }
+    };
+    rows.flatten()
+        .filter_map(|(profile, data)| {
+            let options = serde_pickle::DeOptions::new().replace_unresolved_globals();
+            let serde_pickle::Value::Dict(dict) = serde_pickle::value_from_slice(&data, options).ok()? else {
+                return None;
+            };
+            Some(DesktopLogin {
+                profile,
+                username: text(&dict, "syncUser").unwrap_or_default(),
+                hkey: text(&dict, "syncKey")?,
+                endpoint: text(&dict, "currentSyncUrl").or_else(|| text(&dict, "customSyncUrl")),
+            })
+        })
+        .collect()
+}
+
+/// `desktop-logins`: who Anki desktop is logged in as. Never the keys.
+fn list_desktop_logins() -> Out {
+    let logins: Vec<Value> = desktop_logins()
+        .into_iter()
+        .map(|l| json!({ "profile": l.profile, "username": l.username }))
+        .collect();
+    Ok(json!({ "logins": logins }))
+}
+
+/// `login --from-desktop PROFILE`: reuses that profile's sync key, so no
+/// password is asked for at all.
+fn login_from_desktop(profile: &str) -> Out {
+    let login = desktop_logins()
+        .into_iter()
+        .find(|l| l.profile == profile)
+        .ok_or_else(|| fail("no_profile", format!("Anki desktop has no logged-in profile named {profile}")))?;
+    save_login(&login.username, login.hkey, login.endpoint)?;
+    Ok(json!({ "username": login.username }))
 }
 
 fn logout() -> Out {
@@ -439,7 +585,11 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 
 fn run(args: &[String]) -> Out {
     match args.first().map(String::as_str) {
-        Some("login") => login(),
+        Some("login") => match flag(args, "--from-desktop") {
+            Some(profile) => login_from_desktop(&profile),
+            None => login(),
+        },
+        Some("desktop-logins") => list_desktop_logins(),
         Some("logout") => logout(),
         Some("status") => status(),
         Some("sync") => sync(if args.iter().any(|a| a == "--full-download") {
@@ -467,13 +617,16 @@ fn run(args: &[String]) -> Out {
         }
         _ => Err(fail(
             "usage",
-            "commands: login, logout, status, sync, decks, next, answer",
+            "commands: login, desktop-logins, logout, status, sync, decks, next, answer",
         )),
     }
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "login") && args.iter().any(|a| a == "--interactive") {
+        return login_interactive(flag(&args, "--endpoint"));
+    }
     match run(&args) {
         Ok(mut value) => {
             value["ok"] = json!(true);

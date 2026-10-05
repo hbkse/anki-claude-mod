@@ -46,14 +46,31 @@ The first session downloads the sidecar for your platform from this repo's GitHu
 pinned in [`sidecar.lock`](sidecar.lock). It's about 7 MB, and it is only installed if its SHA-256
 matches the pin. It goes in `bin/` inside the plugin.
 
-Then set your AnkiWeb email and password under `/config` → anki, and run:
+Then log in once:
 
 ```
 /anki login
 ```
 
-That exchanges the password for a sync key, clears the password from your settings, and
-downloads your collection.
+- **If Anki desktop is logged in on this computer**, it offers to reuse that login. No password
+  needed: it copies the profile's sync key.
+- **Otherwise it opens a terminal window** that explains the login and asks for your AnkiWeb email
+  and password, with the password hidden. Over SSH or without a desktop, the command goes on your
+  clipboard to paste into any terminal instead.
+
+### How your password is handled
+
+AnkiWeb has no "authorize this app" page, so like Anki and AnkiDroid, logging in means sending
+your email and password to AnkiWeb once, in exchange for a sync key. anki-claude-mod keeps only
+that key, as Anki does.
+
+The password is typed into the sidecar in its own terminal window. It never passes through
+Claude Code: not its settings, this mod, other mods, or the transcript Claude reads. It goes
+only to `sync.ankiweb.net` (or your own sync server) and is never written anywhere. The code that
+does this is `login_interactive` and `exchange` in [`sidecar/src/main.rs`](sidecar/src/main.rs).
+
+Whatever the login screen, you're trusting this plugin's code with your password once, as you
+trust AnkiDroid's. The code is open, and release binaries are pinned by checksum to builds of it.
 
 ## Commands
 
@@ -90,7 +107,6 @@ mid-session, that one grade is lost.
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `ankiwebUsername` / `ankiwebPassword` | | Used once by `/anki login`; the password is then cleared |
 | `syncServer` | `https://sync.ankiweb.net/` | AnkiWeb, or a [self-hosted sync server](https://docs.ankiweb.net/sync-server.html) |
 
 The deck isn't a setting: pick it from the menu, which remembers your choice.
@@ -100,7 +116,9 @@ The deck isn't a setting: pick it from the menu, which remembers your choice.
 `~/Library/Application Support/anki-claude-mod/` on macOS (`$ANKI_CLAUDE_MOD_DIR` overrides it):
 
 - `collection.anki2`: the sidecar's copy of your collection
-- `auth.json` (mode 600): your email and AnkiWeb sync key. The password is never stored.
+- `auth.json` (mode 600): your email and AnkiWeb sync key, the way Anki desktop keeps its own
+  in `prefs21.db`. The password is never stored. Anything running as you can read this file,
+  including Claude if you approve a read of it. `/anki logout` deletes it.
 
 ## Limits
 
