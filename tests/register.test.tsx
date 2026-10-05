@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { ankiwebSays, appleScriptString, launchers, menuPage, parseReply, shellQuote, syncEndpoint, tally } from '../hooks/register'
+import { ankiwebSays, appleScriptString, launchers, menuPage, parseReply, shellQuote, syncEndpoint, tally, wrapChunks } from '../hooks/register'
 
 const PROPS = {
   hasSurvey: false,
@@ -159,6 +159,37 @@ describe('reviewing', () => {
     expect(await ui.find({ text: /att förhandla/ })).toBeUndefined()
     expect(await ui.find({ text: 'engine band' })).toBeDefined()
     await ui.unmount()
+  })
+})
+
+describe('card text', () => {
+  test('draws furigana over its word, and the card\'s bold', async ($, on) => {
+    mock.clock(on, { now: 1000 })
+    mock.store(on, { deck: 'Kaishi' })
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    const kaishi = {
+      question: '置く\nあの本をどこに置きましたか。',
+      answer: '置[お]く\nto put, to place',
+      questionLines: [[{ t: '置く' }], [{ t: 'あの本をどこに' }, { t: '置きました', b: true }, { t: 'か。' }]],
+      answerLines: [[{ t: '置', r: 'お' }, { t: 'く' }], [{ t: 'to put, to place' }]],
+    }
+    const done = (reply: object) => ({ value: { exitCode: 0, stdout: JSON.stringify(reply), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    on('process.run', async (_$, e) => e.argv[0] === 'sh'
+      ? done({ ok: true, path: BIN })
+      : done({ ok: true, deck: 'Kaishi', card: { id: 1, kind: 'new', ...kaishi }, counts: { new: 1, learning: 0, review: 0 } }))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+    const ui = await $.ui.mount({ plugin: 'anki', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+
+    expect((await ui.findAll({ type: 'Text', text: /^置きました$/ })).some(t => t.props.bold === true)).toBe(true)
+    await ui.press({ key: 'show' })
+    expect((await ui.findAll({ type: 'Text', text: /^お$/ })).some(t => t.props.dimColor === true)).toBe(true)
+    expect(await ui.find({ type: 'Text', text: '置' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'to put, to place' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('wrap pieces: a CJK character each, other text by word', async () => {
+    expect(wrapChunks('あの本 is here')).toEqual(['あ', 'の', '本', ' ', 'is ', 'here'])
   })
 })
 
@@ -343,14 +374,14 @@ describe('sidecar', () => {
     await ui.unmount()
   })
 
-  test('says it is unavailable when it can\'t be found', async ($, on) => {
+  test('says it couldn\'t start when the helper can\'t be found', async ($, on) => {
     mock.clock(on, { now: 1000 })
     mock.store(on, { deck: 'Svensk' })
     on('turn.start', (_$, e) => ({ turnId: e.turnId }))
     on('process.run', fakeSidecar([], { isMissing: true }))
     await $.turn.start({ text: 'hej', turnId: 't1' })
     const ui = await $.ui.mount({ plugin: 'anki', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
-    expect(await ui.find({ type: 'Text', text: /sidecar unavailable/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /couldn't start/ })).toBeDefined()
     await ui.unmount()
   })
 })

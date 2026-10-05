@@ -29,6 +29,7 @@ use anki::scheduler::answering::Rating;
 use anki::sync::collection::normal::SyncActionRequired;
 use anki::sync::login::sync_login;
 use anki::sync::login::SyncAuth;
+use anki::text::decode_entities;
 use anki::text::html_to_text_line;
 use regex::Regex;
 use serde::Deserialize;
@@ -53,12 +54,23 @@ fn fail(code: &'static str, message: impl Into<String>) -> Fail {
 
 impl From<AnkiError> for Fail {
     fn from(err: AnkiError) -> Self {
-        let message = err.to_string();
+        // The same plain wording Anki itself shows, rather than a bare "DbError".
+        let message = html_to_text_line(&err.message(&I18n::template_only()), false).into_owned();
         match err {
             // rslib opens the collection with an exclusive lock
-            AnkiError::DbError { source } if matches!(source.kind, DbErrorKind::Locked) => {
-                fail("busy", "the collection is open in another session")
-            }
+            AnkiError::DbError { source } => match source.kind {
+                DbErrorKind::Locked => fail("busy", "the collection is open in another session"),
+                DbErrorKind::FileTooNew => {
+                    fail("anki", "this collection is from a newer Anki; update the anki plugin with /plugin update")
+                }
+                // Anki's own wording here is debug text, so say what to do instead.
+                _ => fail(
+                    "anki",
+                    "the collection file couldn't be read and may be damaged. With AnkiWeb, /anki download \
+                     replaces it with AnkiWeb's copy; with local decks, open them in Anki desktop and run \
+                     Tools > Check Database",
+                ),
+            },
             AnkiError::SyncError { source } if matches!(source.kind, SyncErrorKind::AuthFailed) => {
                 fail("auth", "AnkiWeb rejected the login; run /anki login again")
             }
@@ -138,7 +150,7 @@ fn check_local(path: &std::path::Path) -> std::result::Result<(), Fail> {
             "old_collection",
             "this collection is from an Anki older than 2.1.50; update Anki desktop and open it there once",
         )),
-        Ok(_) => Err(fail("new_collection", "this collection is from a newer Anki; update anki-claude-mod")),
+        Ok(_) => Err(fail("new_collection", "this collection is from a newer Anki; update the anki plugin with /plugin update")),
         Err(rusqlite::Error::SqliteFailure(e, _)) if matches!(e.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
             Err(desktop_open())
         }
@@ -147,7 +159,7 @@ fn check_local(path: &std::path::Path) -> std::result::Result<(), Fail> {
 }
 
 fn desktop_open() -> Fail {
-    fail("desktop_open", "Anki desktop has this collection open; close it to review here")
+    fail("desktop_open", "Anki desktop has this collection open; anki picks up again once it's closed")
 }
 
 fn auth_path() -> PathBuf {
@@ -294,10 +306,10 @@ fn login_interactive(endpoint: Option<String>) -> ExitCode {
     };
     let server = endpoint.as_deref().unwrap_or("AnkiWeb (sync.ankiweb.net)");
     println!(
-        "anki-claude-mod: log in to AnkiWeb to sync your decks (once)\n\n\
+        "anki for Claude Code: log in to AnkiWeb to sync your decks (once)\n\n\
          Your email and password go only to {server}, the same way Anki and\n\
          AnkiDroid log in. It answers with a sync key, and that key is all\n\
-         anki-claude-mod keeps: your password is not saved anywhere.\n\
+         the anki plugin keeps: your password is not saved anywhere.\n\
          To use decks from Anki desktop without AnkiWeb, close this window\n\
          and run /anki setup instead.\n\
          Details: https://github.com/hbkse/anki-claude-mod#how-your-password-is-handled\n"
@@ -502,6 +514,13 @@ fn sync(full: Full) -> Out {
     }
     let mut auth = read_auth().ok_or_else(|| fail("logged_out", "run /anki login first"))?;
     let rt = runtime();
+    // A one-way download replaces everything here, so it starts from an empty
+    // file: that way it also mends a copy too damaged to open.
+    if full == Full::Download {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = fs::remove_file(format!("{}{suffix}", own_col_path().display()));
+        }
+    }
     let mut col = open()?;
 
     // What AnkiWeb has to say to this account (a notice, a warning), shown
@@ -592,20 +611,325 @@ fn decks() -> Out {
 
 static ANSWER_RULE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?i)<hr[^>]*id=["']?answer["']?[^>]*>"#).unwrap());
-static IMG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<img\b[^>]*>").unwrap());
-static LINE_BREAK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)<br\s*/?>|</(div|p|li|tr|h\d)>").unwrap());
+/// What a note type hides from view: comments (Kaishi keeps whole template
+/// blocks in them), scripts, styles, and the fallback text of <rp>.
+static HIDDEN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?si)<!--.*?-->|<script\b.*?</script>|<style\b.*?</style>|<rp>.*?</rp>").unwrap()
+});
+/// A run of furigana, e.g. <ruby><rb>一</rb><rt>いち</rt></ruby><ruby>応<rt>おう</rt></ruby>.
+static RUBY_RUN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?si)(?:<ruby\b[^>]*>.*?</ruby>)+").unwrap());
+static RUBY_PAIR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?si)(.*?)<rt\b[^>]*>(.*?)</rt>").unwrap());
 
-/// One terminal-friendly line: tags and sounds gone, images marked, the
-/// card's own line breaks shown as " / ".
-fn plain(html: &str) -> String {
-    let html = IMG.replace_all(html, "[image]");
-    LINE_BREAK
-        .split(&html)
-        .map(|part| html_to_text_line(part, false).split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|part| !part.is_empty())
+// Furigana in a run is marked with private-use characters while the HTML is
+// walked, so styles around it (a bold target word) still apply.
+const RUBY_START: char = '\u{E000}';
+const RUBY_MID: char = '\u{E001}';
+const RUBY_END: char = '\u{E002}';
+static SOUND: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[sound:[^\]]*\]|\[\[type:[^\]]*\]\]").unwrap());
+static TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<[^>]*>|[^<]+").unwrap());
+static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)^<\s*(/?)\s*([a-zA-Z0-9]+)(.*?)/?\s*>$").unwrap());
+static CSS_COLOR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)(?:^|[;\s"'])color\s*:\s*([^;"']+)"#).unwrap());
+static FONT_COLOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\bcolor\s*=\s*["']?([^"'\s>]+)"#).unwrap());
+static RGB: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)").unwrap());
+
+/// Marks furigana runs: 一応 read いちおう becomes START 一応 MID いちおう END,
+/// a run of kanji read together.
+fn mark_furigana(html: &str) -> String {
+    RUBY_RUN
+        .replace_all(html, |run: &regex::Captures| {
+            let inner = Regex::new(r"(?i)</?ruby\b[^>]*>|</?rb>").unwrap().replace_all(&run[0], "");
+            let (mut base, mut reading) = (String::new(), String::new());
+            let mut rest = inner.as_ref();
+            for pair in RUBY_PAIR.captures_iter(&inner) {
+                base.push_str(&html_to_text_line(&pair[1], false));
+                reading.push_str(&html_to_text_line(&pair[2], false));
+                rest = &inner[pair.get(0).unwrap().end()..];
+            }
+            base.push_str(&html_to_text_line(rest, false));
+            if reading.is_empty() { base } else { format!("{RUBY_START}{base}{RUBY_MID}{reading}{RUBY_END}") }
+        })
+        .into_owned()
+}
+
+/// Furigana as Anki writes it in fields: the reading in brackets after the
+/// word. The text fallback, where ruby can't be drawn.
+#[cfg(test)]
+fn furigana(html: &str) -> String {
+    mark_furigana(html)
+        .replace(RUBY_START, "")
+        .replace(RUBY_MID, "[")
+        .replace(RUBY_END, "]")
+}
+
+/// One styled run of a card's text; `r` is the furigana over it.
+#[derive(Serialize, Clone, Default, PartialEq, Debug)]
+struct Seg {
+    t: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    r: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    b: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    i: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    u: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    c: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct Style {
+    b: bool,
+    i: bool,
+    u: bool,
+    c: Option<String>,
+}
+
+/// A CSS or <font> colour a terminal can show: a name or #hex, rgb() turned
+/// into hex. Anything else (var(), hsl()) is left out.
+fn terminal_color(value: &str) -> Option<String> {
+    let v = value.trim().trim_end_matches("!important").trim();
+    if let Some(m) = RGB.captures(v) {
+        let n = |i: usize| m[i].parse::<u8>().unwrap_or(0);
+        return Some(format!("#{:02x}{:02x}{:02x}", n(1), n(2), n(3)));
+    }
+    let ok = v.starts_with('#') && matches!(v.len(), 4 | 7) && v[1..].chars().all(|c| c.is_ascii_hexdigit())
+        || !v.is_empty() && v.chars().all(|c| c.is_ascii_alphabetic());
+    (ok && !matches!(v.to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset" | "currentcolor" | "transparent"))
+        .then(|| v.to_ascii_lowercase())
+}
+
+/// A card side as lines of styled runs: one line per block of the card, tags
+/// and sounds gone, bold/italic/underline/colour kept, furigana as readings.
+/// Images show as [image] only when the side has nothing else.
+fn rich(html: &str) -> Vec<Vec<Seg>> {
+    const BLOCKS: &[&str] = &[
+        "br", "div", "p", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "table", "details", "summary",
+    ];
+    let html = SOUND.replace_all(&HIDDEN.replace_all(html, ""), "").into_owned();
+    let html = mark_furigana(&html);
+
+    let mut lines: Vec<Vec<Seg>> = vec![vec![]];
+    let mut stack: Vec<(String, Style)> = vec![];
+    let style = |stack: &Vec<(String, Style)>| stack.last().map(|(_, s)| s.clone()).unwrap_or_default();
+    let push = |lines: &mut Vec<Vec<Seg>>, seg: Seg| {
+        let line = lines.last_mut().unwrap();
+        match line.last_mut() {
+            Some(last) if last.r.is_none() && seg.r.is_none() && Seg { t: String::new(), ..last.clone() } == Seg { t: String::new(), ..seg.clone() } => {
+                last.t.push_str(&seg.t)
+            }
+            _ => line.push(seg),
+        }
+    };
+
+    for token in TOKEN.find_iter(&html).map(|m| m.as_str()) {
+        if let Some(tag) = TAG.captures(token) {
+            let (closing, name, attrs) = (&tag[1] == "/", tag[2].to_ascii_lowercase(), &tag[3]);
+            if BLOCKS.contains(&name.as_str()) {
+                lines.push(vec![]);
+            } else if name == "img" {
+                let s = style(&stack);
+                push(&mut lines, Seg { t: "[image]".into(), b: s.b, i: s.i, u: s.u, c: s.c, r: None });
+            } else if closing {
+                if let Some(at) = stack.iter().rposition(|(n, _)| *n == name) {
+                    stack.truncate(at);
+                }
+            } else if matches!(name.as_str(), "b" | "strong" | "i" | "em" | "u" | "span" | "font") {
+                let mut s = style(&stack);
+                match name.as_str() {
+                    "b" | "strong" => s.b = true,
+                    "i" | "em" => s.i = true,
+                    "u" => s.u = true,
+                    _ => {}
+                }
+                let color = CSS_COLOR.captures(attrs).or_else(|| (name == "font").then(|| FONT_COLOR.captures(attrs)).flatten());
+                if let Some(c) = color.and_then(|m| terminal_color(&m[1])) {
+                    s.c = Some(c);
+                }
+                if attrs.contains("font-weight") && (attrs.contains("bold") || attrs.contains("700")) {
+                    s.b = true;
+                }
+                stack.push((name, s));
+            }
+            continue;
+        }
+
+        let text = decode_entities(token).replace('\u{a0}', " ");
+        let s = style(&stack);
+        let plain = |t: &str| Seg { t: t.to_string(), b: s.b, i: s.i, u: s.u, c: s.c.clone(), r: None };
+        let mut rest = text.as_str();
+        while let Some(start) = rest.find(RUBY_START) {
+            push(&mut lines, plain(&rest[..start]));
+            let after = &rest[start + RUBY_START.len_utf8()..];
+            let (Some(mid), Some(end)) = (after.find(RUBY_MID), after.find(RUBY_END)) else { break };
+            push(&mut lines, Seg { r: Some(after[mid + RUBY_MID.len_utf8()..end].trim().to_string()), ..plain(after[..mid].trim()) });
+            rest = &after[end + RUBY_END.len_utf8()..];
+        }
+        push(&mut lines, plain(rest));
+    }
+
+    // Collapse whitespace as a browser would, trim each line, drop empty ones.
+    let mut out: Vec<Vec<Seg>> = vec![];
+    for line in lines {
+        let mut segs: Vec<Seg> = vec![];
+        for mut seg in line {
+            let (lead, trail) = (seg.t.starts_with(char::is_whitespace), seg.t.ends_with(char::is_whitespace));
+            let words = seg.t.split_whitespace().collect::<Vec<_>>().join(" ");
+            if words.is_empty() && seg.r.is_none() {
+                // Whitespace alone: one space between its neighbours.
+                if lead {
+                    if let Some(l) = segs.last_mut() {
+                        if !l.t.ends_with(' ') {
+                            l.t.push(' ');
+                        }
+                    }
+                }
+                continue;
+            }
+            if lead {
+                if let Some(l) = segs.last_mut() {
+                    if !l.t.ends_with(' ') {
+                        l.t.push(' ');
+                    }
+                }
+            }
+            seg.t = if trail { format!("{words} ") } else { words };
+            segs.push(seg);
+        }
+        if let Some(l) = segs.last_mut() {
+            l.t = l.t.trim_end().to_string();
+        }
+        if let Some(f) = segs.first_mut() {
+            f.t = f.t.trim_start().to_string();
+        }
+        segs.retain(|s| !s.t.is_empty() || s.r.is_some());
+        if !segs.is_empty() {
+            out.push(segs);
+        }
+    }
+
+    let is_image = |line: &Vec<Seg>| line.iter().all(|s| s.t.replace("[image]", "").trim().is_empty() && s.r.is_none());
+    if out.iter().all(is_image) {
+        return out;
+    }
+    out.into_iter()
+        .filter(|l| !is_image(l))
+        .map(|l| {
+            l.into_iter()
+                .filter_map(|mut s| {
+                    s.t = s.t.replace("[image]", "");
+                    (!s.t.trim().is_empty() || s.r.is_some()).then_some(s)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The same as text, furigana in brackets: for a surface that can't draw ruby.
+fn plain_lines(lines: &[Vec<Seg>]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            line.iter()
+                .map(|s| match &s.r {
+                    Some(r) => format!("{}[{r}]", s.t),
+                    None => s.t.clone(),
+                })
+                .collect::<String>()
+        })
         .collect::<Vec<_>>()
-        .join(" / ")
+        .join("\n")
+}
+
+fn plain(html: &str) -> String {
+    plain_lines(&rich(html))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A Kaishi 1.5k card, as Anki renders it.
+    const KAISHI_ANSWER: &str = r#"<div lang="ja">
+<ruby><rb>置</rb><rt>お</rt></ruby>く
+
+<!-- This part enables pitch accent.
+
+{{#Pitch Accent}}
+	<br><div style='font-size: 24px'>{{Pitch Accent}}</div>
+{{/Pitch Accent}}
+
+-->
+
+<div style='font-size: 25px; padding-bottom:20px'>to put, to place</div>
+<div style='font-size: 25px;'>あの<ruby><rb>本</rb><rt>ほん</rt></ruby>をどこに<b><ruby><rb>置</rb><rt>お</rt></ruby>きました</b>か。</div>
+<div style='font-size: 25px; padding-bottom:10px'>Where did you put that book?</div>
+
+[sound:66ee151d6e524a561a5c19b631a6a2a6.mp3]
+<br>
+<img src="yuubin_takuhaiin_door.webp">
+
+<!-- {{#Pitch Accent Notes}}
+<div><details><summary>Pitch Accent Notes</summary><br>{{Pitch Accent Notes}}</details></div>
+{{/Pitch Accent Notes}} -->
+</div>"#;
+
+    #[test]
+    fn kaishi_answer() {
+        assert_eq!(
+            plain(KAISHI_ANSWER),
+            "置[お]く\nto put, to place\nあの本[ほん]をどこに置[お]きましたか。\nWhere did you put that book?"
+        );
+    }
+
+    #[test]
+    fn kaishi_question_keeps_its_two_lines() {
+        let q = "<div lang=\"ja\">\n置く\n<div style='font-size: 20px;'>あの本をどこに<b>置きました</b>か。</div>\n</div>";
+        assert_eq!(plain(q), "置く\nあの本をどこに置きましたか。");
+    }
+
+    #[test]
+    fn furigana_runs_read_together() {
+        assert_eq!(furigana("<ruby><rb>一</rb><rt>いち</rt></ruby><ruby><rb>応</rb><rt>おう</rt></ruby>"), "一応[いちおう]");
+        // One <ruby> with several readings, and <rp> fallbacks, as some note types write it.
+        assert_eq!(plain("<ruby>漢<rp>(</rp><rt>かん</rt><rp>)</rp>字<rt>じ</rt></ruby>を"), "漢字[かんじ]を");
+    }
+
+    #[test]
+    fn kaishi_answer_keeps_bold_and_readings() {
+        let lines = rich(KAISHI_ANSWER);
+        let seg = |t: &str, r: Option<&str>, b: bool| Seg { t: t.into(), r: r.map(Into::into), b, ..Default::default() };
+        assert_eq!(lines[0], vec![seg("置", Some("お"), false), seg("く", None, false)]);
+        assert_eq!(
+            lines[2],
+            vec![
+                seg("あの", None, false),
+                seg("本", Some("ほん"), false),
+                seg("をどこに", None, false),
+                seg("置", Some("お"), true),
+                seg("きました", None, true),
+                seg("か。", None, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn colours_and_spacing() {
+        let lines = rich(r#"<span style="color: rgb(255, 0, 0)">red</span> and <font color="blue">blue</font> <i>it</i>&nbsp;x"#);
+        let ts: Vec<(&str, Option<&str>, bool)> = lines[0].iter().map(|s| (s.t.as_str(), s.c.as_deref(), s.i)).collect();
+        assert_eq!(ts, vec![("red ", Some("#ff0000"), false), ("and ", None, false), ("blue ", Some("blue"), false), ("it ", None, true), ("x", None, false)]);
+        assert_eq!(terminal_color("var(--x)"), None);
+        assert_eq!(terminal_color("#ABC"), Some("#abc".into()));
+    }
+
+    #[test]
+    fn image_only_side_keeps_its_marker() {
+        assert_eq!(plain("<img src=\"a.png\">"), "[image]");
+        assert_eq!(plain("word<br><img src=\"a.png\">"), "word");
+    }
 }
 
 fn counts(col: &mut Collection) -> std::result::Result<Value, Fail> {
@@ -640,11 +964,14 @@ fn next(deck: Option<String>, skip: Option<i64>) -> Out {
             let answer = rendered.answer();
             // The answer side repeats the question above <hr id=answer>.
             let answer = ANSWER_RULE.split(&answer).last().unwrap_or_default();
+            let (question, answer) = (rich(&rendered.question()), rich(answer));
             json!({
                 "id": q.card.id().0,
                 "kind": format!("{:?}", q.kind).to_lowercase(),
-                "question": plain(&rendered.question()),
-                "answer": plain(answer),
+                "question": plain_lines(&question),
+                "answer": plain_lines(&answer),
+                "questionLines": question,
+                "answerLines": answer,
             })
         }
     };
@@ -762,6 +1089,27 @@ fn run(args: &[String]) -> Out {
             std::thread::sleep(std::time::Duration::from_secs(flag(args, "--secs").and_then(|s| s.parse().ok()).unwrap_or(3)));
             col.close(None)?;
             Ok(json!({}))
+        }
+        // Debug builds only: the next N due cards' raw HTML beside what's shown.
+        #[cfg(debug_assertions)]
+        Some("inspect") => {
+            let n = flag(args, "--n").and_then(|n| n.parse().ok()).unwrap_or(3);
+            let mut col = open()?;
+            let deck = col.get_current_deck()?.human_name();
+            let mut cards = vec![];
+            for q in col.get_queued_cards(n, false)?.cards {
+                let r = col.render_existing_card(q.card.id(), false, false)?;
+                let answer = r.answer();
+                let answer_side = ANSWER_RULE.split(&answer).last().unwrap_or_default().to_string();
+                cards.push(json!({
+                    "questionHtml": r.question(),
+                    "answerHtml": answer_side,
+                    "shownQuestion": plain(&r.question()),
+                    "shownAnswer": plain(&answer_side),
+                }));
+            }
+            col.close(None)?;
+            Ok(json!({ "deck": deck, "cards": cards }))
         }
         #[cfg(debug_assertions)]
         Some("seed") => seed(

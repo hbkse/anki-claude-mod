@@ -35,7 +35,7 @@ $key = 'windows-x64'
 $repo = Field 'repo'
 $version = Field 'version'
 $sha = Field $key
-if (-not $version -or -not $sha) { Fail 'missing' 'no sidecar release pinned yet; build one into bin\ with cargo' }
+if (-not $version -or -not $sha) { Fail 'missing' 'no release of anki''s helper yet; build one into bin\ with cargo' }
 
 if ((Test-Path $bin) -and ((Sha256 $bin) -eq $sha)) { Ok 'release' }
 
@@ -56,7 +56,7 @@ try {
     $out.Dispose(); $in.Dispose()
   }
 
-  if ((Sha256 $tmp) -ne $sha) { Fail 'checksum' "the downloaded sidecar doesn't match sidecar.lock; not installing it" }
+  if ((Sha256 $tmp) -ne $sha) { Fail 'checksum' "the downloaded helper doesn't match its published checksum, so it wasn't installed" }
   Move-Item -Force -Path $tmp -Destination $bin
   Ok 'release'
 } finally {

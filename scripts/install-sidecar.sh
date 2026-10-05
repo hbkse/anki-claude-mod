@@ -34,13 +34,13 @@ case "$(uname -s)-$(uname -m)" in
   Darwin-x86_64) key=darwin-x64 ;;
   Linux-x86_64) key=linux-x64 ;;
   Linux-aarch64 | Linux-arm64) key=linux-arm64 ;;
-  *) fail unsupported "no prebuilt sidecar for $(uname -sm); build one with scripts/build-sidecar.sh" ;;
+  *) fail unsupported "anki has no ready-made helper for $(uname -sm); build one with scripts/build-sidecar.sh" ;;
 esac
 
 repo=$(field repo)
 version=$(field version)
 sha=$(field "$key")
-[ -n "$version" ] && [ -n "$sha" ] || fail missing "no sidecar release pinned yet; build one with scripts/build-sidecar.sh"
+[ -n "$version" ] && [ -n "$sha" ] || fail missing "no release of anki's helper yet; build one with scripts/build-sidecar.sh"
 
 [ -x "$bin" ] && [ "$(sha256 "$bin")" = "$sha" ] && ok release
 
@@ -52,6 +52,6 @@ trap 'rm -f "$tmp" "$tmp.gz"' EXIT
 
 curl -fsSL --retry 2 --max-time 120 -o "$tmp.gz" "$url" || fail network "couldn't download $url"
 gunzip -c "$tmp.gz" >"$tmp" || fail crash "couldn't unpack $url"
-[ "$(sha256 "$tmp")" = "$sha" ] || fail checksum "the downloaded sidecar doesn't match sidecar.lock; not installing it"
+[ "$(sha256 "$tmp")" = "$sha" ] || fail checksum "the downloaded helper doesn't match its published checksum, so it wasn't installed"
 chmod +x "$tmp" && mv -f "$tmp" "$bin" || fail io "can't install into $root/bin"
 ok release

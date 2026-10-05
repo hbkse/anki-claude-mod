@@ -149,7 +149,10 @@ The deck isn't a setting: pick it from the menu, which remembers your choice.
 
 ## Limits
 
-- Cards are shown as text: images become `[image]` and sounds are dropped. Media isn't synced.
+- Cards are drawn as terminal text, not with your note type's HTML and CSS: one line per block of
+  the card, with bold, italic, underline and colours kept, and furigana drawn above its kanji.
+  Template comments, scripts and styles are left out. Images and sounds aren't shown, and media
+  isn't synced.
 - Picking a deck changes the collection's current deck, which syncs like any deck switch.
 - If AnkiWeb asks for a one-way sync (after a note type change, say), the band tells you.
   `/anki download` drops reviews from Claude that haven't synced yet; `/anki upload`
@@ -167,6 +170,7 @@ claude --plugin-dir .
 claude plugin validate .
 claude plugin test .                        # mod tests, sidecar faked
 ANKI_CLAUDE_MOD_DIR=/tmp/aw sidecar/target/debug/anki-claude-mod-sidecar seed 5   # debug builds only
+sidecar/target/debug/anki-claude-mod-sidecar inspect --n 3   # due cards' HTML beside what's drawn
 ANKI_CLAUDE_MOD_DIR=/tmp/aw sidecar/target/debug/anki-claude-mod-sidecar next
 ```
 

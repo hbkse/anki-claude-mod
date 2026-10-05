@@ -1,4 +1,14 @@
-export type Card = { id: number; kind: 'new' | 'learning' | 'review'; question: string; answer: string }
+/** A styled run of card text; `r` is the furigana drawn over it. */
+export type Seg = { t: string; r?: string; b?: boolean; i?: boolean; u?: boolean; c?: string }
+export type Card = {
+  id: number
+  kind: 'new' | 'learning' | 'review'
+  /** Plain text, furigana in brackets: what's drawn where lines can't be. */
+  question: string
+  answer: string
+  questionLines?: Seg[][]
+  answerLines?: Seg[][]
+}
 export type Counts = { new: number; learning: number; review: number }
 export type DeckRow = Counts & { name: string; level: number }
 export type Band = {

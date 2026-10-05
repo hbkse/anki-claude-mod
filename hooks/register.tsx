@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Band, Card, Counts, DeckRow, Menu } from '../types'
+import type { Band, Card, Counts, DeckRow, Menu, Seg } from '../types'
 
 // The sidecar (sidecar/, Rust over Anki's own core) owns the collection and
 // talks to AnkiWeb. This module only draws the band and runs the sidecar, one
@@ -88,6 +88,14 @@ export function syncEndpoint(url: string): string | undefined {
   if (!value || value.replace(/\/+$/, '') === ANKIWEB.replace(/\/+$/, '')) return undefined
 
   return value
+}
+
+/**
+ * Pieces of a run that can wrap apart: each CJK character on its own, other
+ * text by word with its trailing space.
+ */
+export function wrapChunks(text: string): string[] {
+  return text.match(/[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]|[^\s\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]+\s*|\s+/g) ?? []
 }
 
 /** The rows on `page` of the deck menu, at most `size`, and how many pages there are. */
@@ -420,7 +428,7 @@ async function detectHost($: EngineInterface): Promise<Host> {
 // not its settings, this module, other mods' hooks or the transcript.
 async function openLoginWindow($: EngineInterface): Promise<string> {
   const found = await sidecar($, ['status'])
-  if (!found.ok || binPath === null) return `Sidecar unavailable: ${found.ok ? 'not installed' : found.message}`
+  if (!found.ok || binPath === null) return `anki couldn't start its helper: ${found.ok ? 'not installed' : found.message}`
 
   const endpoint = syncEndpoint(settings.syncServer)
   const argv = [binPath, 'login', '--interactive', ...(endpoint ? ['--endpoint', endpoint] : [])]
@@ -511,8 +519,7 @@ async function setup($: EngineInterface, path: string): Promise<string> {
   if (reply.ankiwebActive) {
     return `Saved ${where}, but you're logged in to AnkiWeb, which comes first: anki keeps using AnkiWeb's decks, and uses this collection only after /anki logout.`
   }
-  const close = reply.desktopOpen ? ' Anki desktop has it open right now: close it while you review here.' : ' Close Anki desktop while you review here.'
-  return `Reviewing ${where} directly; reviews go straight into it.${close} To sync with AnkiWeb instead (recommended), run /anki login.`
+  return `Reviewing decks from ${where}. anki pauses while Anki desktop is open.`
 }
 
 async function runCommand($: EngineInterface, args: string): Promise<string> {
@@ -534,7 +541,7 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
     case 'upload': {
       const mode = sub === 'download' ? '--full-download' : sub === 'upload' ? '--full-upload' : ''
       const reply = await sync($, mode, { announce: false })
-      if (reply.ok && reply.result === 'local') return `Using local decks, which don't sync with AnkiWeb. ${NO_ANKIWEB_LOGIN}`
+      if (reply.ok && reply.result === 'local') return 'Using local decks, which don\'t sync with AnkiWeb. /anki login to sync with AnkiWeb instead.'
       if (!reply.ok && reply.code === 'logged_out') return NO_ANKIWEB_LOGIN
       if (reply.ok && reply.result === 'full_sync_required') return `${ONE_WAY_SYNC}${ankiwebSays(reply)}`
       return reply.ok ? `AnkiWeb: ${String(reply.result).replace(/_/g, ' ')}.${ankiwebSays(reply)}` : `AnkiWeb sync failed: ${reply.message}`
@@ -546,20 +553,67 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
         return `Reviewing ${name}.`
       }
       await openMenu($)
-      return 'Pick a deck in the band above the prompt while Claude works (0 opens it any time).'
+      return 'The deck list shows above the prompt next time Claude is working. 0 opens it any time.'
     }
     case 'status': {
+      // The band only says something went wrong; this is where it says what.
+      const { status, message } = await read($, band)
+      const problem = (status === 'error' || status === 'missing') && message ? ` Last problem: ${message}` : ''
       const reply = await sidecar($, ['status'])
-      if (!reply.ok) return `Sidecar unavailable: ${reply.message}`
+      if (!reply.ok) return `anki couldn't start its helper: ${reply.message}`
       const c = await read($, counts)
       const deck = `deck ${(await chosenDeck($)) ?? 'not picked'}${c ? ` · ${tally(c) || 'nothing due'}` : ''}`
-      if (reply.mode === 'local') return `Local decks from ${String(reply.collection)}, no AnkiWeb sync · ${deck}. /anki login to sync with AnkiWeb.`
-      if (reply.mode === 'ankiweb') return `Syncing with AnkiWeb as ${String(reply.username)} · ${deck} · ${unsynced + (pending ? 1 : 0)} reviews to sync.`
-      return NOTHING_SET_UP
+      if (reply.mode === 'local') return `Local decks from ${String(reply.collection)}, no AnkiWeb sync · ${deck}. /anki login to sync with AnkiWeb.${problem}`
+      if (reply.mode === 'ankiweb') return `Syncing with AnkiWeb as ${String(reply.username)} · ${deck} · ${unsynced + (pending ? 1 : 0)} reviews to sync.${problem}`
+      return `${NOTHING_SET_UP}${problem}`
     }
     default:
       return 'Usage: /anki [status | login | setup [folder] | deck [name] | sync | download | upload | logout]'
   }
+}
+
+type Ui = ReturnType<EngineInterface['ui']['resolve']>
+
+/**
+ * A card side drawn from its lines: styled runs, and furigana stacked over
+ * its word. A line with furigana is a wrapping row of two-row columns; one
+ * without is a single line of text. `base` is the side's own colour.
+ */
+function cardSide({ ui, lines, fallback, prefix, base }: { ui: Ui; lines?: Seg[][]; fallback: string; prefix: string; base?: string }) {
+  const { Box, Text } = ui
+  if (!lines?.length) return <Text color={base}>{prefix}{fallback || '(empty)'}</Text>
+  const styled = (seg: Seg, key: string, text = seg.t) => (
+    <Text key={key} color={seg.c ?? base} bold={seg.b} italic={seg.i} underline={seg.u}>{text}</Text>
+  )
+
+  return (
+    <Box flexDirection="column">
+      {lines.map((line, i) => {
+        const lead = i === 0 ? prefix : '  '
+        if (!line.some(seg => seg.r)) {
+          return <Text key={`l${i}`} color={base}>{lead}{line.map((seg, j) => styled(seg, `s${j}`))}</Text>
+        }
+        return (
+          <Box key={`l${i}`} flexDirection="row" flexWrap="wrap">
+            <Box flexDirection="column"><Text> </Text><Text color={base}>{lead}</Text></Box>
+            {line.flatMap((seg, j) => seg.r
+              ? [
+                <Box key={`s${j}`} flexDirection="column" alignItems="center">
+                  <Text dimColor>{seg.r}</Text>
+                  {styled(seg, 'base')}
+                </Box>,
+              ]
+              : wrapChunks(seg.t).map((chunk, k) => (
+                <Box key={`s${j}.${k}`} flexDirection="column">
+                  <Text> </Text>
+                  {styled(seg, 'base', chunk)}
+                </Box>
+              )))}
+          </Box>
+        )
+      })}
+    </Box>
+  )
 }
 
 export const register: Register = (on, options) => {
@@ -633,7 +687,7 @@ export const register: Register = (on, options) => {
             <Text dimColor>{pages > 1 ? `${page + 1}/${pages}` : ''}</Text>
           </Box>
           {rows.length === 0
-            ? <Text dimColor>no decks yet · /anki login, or /anki sync</Text>
+            ? <Text dimColor>no decks yet · /anki to set up</Text>
             : rows.map((row, i) => (
               <Box key={row.name} gap={1}>
                 <Button
@@ -665,7 +719,7 @@ export const register: Register = (on, options) => {
       if (status === 'syncing') return <Text dimColor>  {title} · syncing with AnkiWeb…</Text>
       if (status === 'logged_out') return <Text dimColor>  anki · /anki login to pull decks from AnkiWeb, or /anki setup for decks on this computer</Text>
       if (status === 'desktop_open') return <Text dimColor>  anki · paused while Anki desktop is open</Text>
-      if (status === 'missing') return <Text dimColor>  anki · sidecar unavailable (/anki status)</Text>
+      if (status === 'missing') return <Text dimColor>  anki · couldn't start (/anki status)</Text>
       if (status === 'error') return <Text dimColor>  {title} · /anki status for details</Text>
       if (status === 'empty') {
         return (
@@ -687,9 +741,9 @@ export const register: Register = (on, options) => {
           <Text color="cyan" bold>{title}</Text>
           <Text dimColor>{c ? tally(c) : ''}</Text>
         </Box>
-        <Text bold color="yellow">{current.question || '(empty)'}</Text>
+        {cardSide({ ui: $.ui.resolve(e), lines: current.questionLines, fallback: current.question, prefix: '', base: 'yellow' })}
         {shown
-          ? <Text>→ {current.answer || '(empty)'}</Text>
+          ? cardSide({ ui: $.ui.resolve(e), lines: current.answerLines, fallback: current.answer, prefix: '→ ' })
           : <Text dimColor>→ ···</Text>}
         <Box gap={2}>
           {shown
