@@ -17,10 +17,10 @@
   "userConfig": {
     "syncServer": {
       "type": "string",
-      "title": "Sync server",
-      "description": "AnkiWeb, or the URL of a self-hosted Anki sync server.",
+      "title": "Sync server (optional)",
+      "description": "Leave blank to sync with AnkiWeb (sync.ankiweb.net), the default. To use your own Anki sync server instead, enter its URL here.",
       "required": false,
-      "default": "https://sync.ankiweb.net/"
+      "default": ""
     }
   }
 }

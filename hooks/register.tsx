@@ -46,8 +46,9 @@ export type Reply = { ok: true; [key: string]: unknown } | { ok: false; code: st
 // undo only has to forget it: nothing is written to Anki and then reversed.
 type Pending = { card: Card; grade: Grade; ms: number; at: number }
 
+// Blank means AnkiWeb, as the setting's description says.
 let settings: Settings = {
-  syncServer: ANKIWEB,
+  syncServer: '',
 }
 let calls: Promise<unknown> = Promise.resolve()
 let binPath: string | null = null
