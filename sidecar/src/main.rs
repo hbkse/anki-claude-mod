@@ -312,7 +312,7 @@ fn login_interactive(endpoint: Option<String>) -> ExitCode {
          the anki plugin keeps: your password is not saved anywhere.\n\
          To use decks from Anki desktop without AnkiWeb, close this window\n\
          and run /anki setup instead.\n\
-         Details: https://github.com/hbkse/anki-claude-mod#how-your-password-is-handled\n"
+         Details: https://github.com/hbkse/anki-claude-mod#ankiweb-password-information\n"
     );
 
     let close = |code: ExitCode| {
