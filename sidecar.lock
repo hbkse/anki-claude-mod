@@ -1,2 +1,8 @@
 # Pinned by .github/workflows/release.yml; scripts/install-sidecar.* read it.
 repo hbkse/anki-claude-mod
+version v0.1.0
+darwin-arm64 5de9bf1caf0cb9b5002bf9c9ef8f3a4cd131f4da31a165838604904f02863045
+darwin-x64 ddb7bbe1bd65033d824987ed619a88aa2eeb35ebdfc4eae5d9a02bf3ed91e0a5
+linux-arm64 313f9c6fe493c8adf7c1e55e6c302e20cb4589e07303a5d94a5b5fbac7bbbf08
+linux-x64 3bc0acf849484716006bdf5ba545e68c21364a0b995bb39e78da9dc358c4113d
+windows-x64 4b313bcfd15017145616c9ebbdaa95b686ed0b077687dfc912fe52155451d4df
