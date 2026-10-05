@@ -1,5 +1,7 @@
 # anki-claude-mod
 
+The `anki` plugin, from the [hbkse](https://github.com/hbkse/claude-plugins) marketplace.
+
 A Claude Code mod that shows your due Anki cards above the prompt while Claude works, and syncs
 your reviews straight to AnkiWeb. You don't need Anki desktop or AnkiConnect: it works if you
 mostly study on AnkiDroid or AnkiMobile.
@@ -33,8 +35,8 @@ cover macOS (Apple Silicon, Intel), Linux (x64, arm64) and Windows (x64).
 ## Install
 
 ```
-/plugin marketplace add hbkse/anki-claude-mod
-/plugin install anki-claude-mod@anki-claude-mod
+/plugin marketplace add hbkse/claude-plugins
+/plugin install anki@hbkse
 /reload-plugins
 ```
 
@@ -42,7 +44,7 @@ The first session downloads the sidecar for your platform from this repo's GitHu
 pinned in [`sidecar.lock`](sidecar.lock). It's about 7 MB, and it is only installed if its SHA-256
 matches the pin. It goes in `bin/` inside the plugin.
 
-Then set your AnkiWeb email and password under `/config` → anki-claude-mod, and run:
+Then set your AnkiWeb email and password under `/config` → anki, and run:
 
 ```
 /anki login

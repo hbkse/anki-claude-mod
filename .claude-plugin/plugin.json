@@ -1,5 +1,5 @@
 {
-  "name": "anki-claude-mod",
+  "name": "anki",
   "version": "0.1.0",
   "description": "Review your AnkiWeb decks above the Claude Code prompt while Claude works. Syncs straight with AnkiWeb through Anki's own Rust core; no Anki desktop or AnkiConnect needed.",
   "author": {

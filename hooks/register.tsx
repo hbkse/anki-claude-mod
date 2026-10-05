@@ -20,10 +20,10 @@ const SYNC_TIMEOUT_MS = 120_000
 const CALL_TIMEOUT_MS = 15_000
 const INSTALL_TIMEOUT_MS = 180_000
 
-const card = atom({ plugin: 'anki-claude-mod', key: 'card' } as const, null)
-const isRevealed = atom({ plugin: 'anki-claude-mod', key: 'isRevealed' } as const, false)
-const band = atom({ plugin: 'anki-claude-mod', key: 'band' } as const, { status: 'idle', deck: '' })
-const counts = atom({ plugin: 'anki-claude-mod', key: 'counts' } as const, null)
+const card = atom({ plugin: 'anki', key: 'card' } as const, null)
+const isRevealed = atom({ plugin: 'anki', key: 'isRevealed' } as const, false)
+const band = atom({ plugin: 'anki', key: 'band' } as const, { status: 'idle', deck: '' })
+const counts = atom({ plugin: 'anki', key: 'counts' } as const, null)
 
 type Grade = (typeof GRADES)[number]['name']
 type Settings = {
@@ -224,7 +224,7 @@ async function answer($: EngineInterface, shown: Card, grade: Grade): Promise<vo
 async function login($: EngineInterface): Promise<string> {
   const username = settings.ankiwebUsername.trim()
   if (!username || !settings.ankiwebPassword) {
-    return 'Set your AnkiWeb email and password in /config (anki-claude-mod), then run /anki login.'
+    return 'Set your AnkiWeb email and password in /config (anki), then run /anki login.'
   }
   const reply = await sidecar($, ['login'], {
     stdin: JSON.stringify({ username, password: settings.ankiwebPassword, endpoint: settings.syncServer.trim() || undefined }),
@@ -233,7 +233,7 @@ async function login($: EngineInterface): Promise<string> {
   if (!reply.ok) return `Login failed: ${reply.message}`
 
   // The sync key is all we need from here on; don't keep the password around.
-  await $.config.set({ key: 'anki-claude-mod.ankiwebPassword', value: '' }).catch(() => undefined)
+  await $.config.set({ key: 'anki.ankiwebPassword', value: '' }).catch(() => undefined)
   const synced = await sync($)
 
   return synced.ok ? `Logged in to AnkiWeb as ${username} and synced.` : `Logged in as ${username}; sync failed: ${synced.message}`

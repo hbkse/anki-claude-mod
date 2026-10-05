@@ -61,7 +61,7 @@ describe('register', () => {
       await $.turn.start({ text: 'hej', turnId: 't1' })
 
       expect(sidecarCalls(calls, 'next')).toEqual([['--deck', 'Svensk']])
-      const ui = await $.ui.mount({ plugin: 'anki-claude-mod', surface, component: 'AbovePrompt', props: PROPS })
+      const ui = await $.ui.mount({ plugin: 'anki', surface, component: 'AbovePrompt', props: PROPS })
       expect(await ui.find({ type: 'Text', text: 'Svensk' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: '2 new' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: 'att förhandla' })).toBeDefined()
@@ -85,7 +85,7 @@ describe('register', () => {
     on('process.run', fakeSidecar(calls))
     await $.turn.start({ text: 'hej', turnId: 't1' })
 
-    const ui = await $.ui.mount({ plugin: 'anki-claude-mod', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    const ui = await $.ui.mount({ plugin: 'anki', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
     await ui.press({ key: 'show' })
     await ui.press({ key: 'again' })
     expect(sidecarCalls(calls, 'answer')).toEqual([])
@@ -105,7 +105,7 @@ describe('register', () => {
     await $.turn.start({ text: 'again', turnId: 't2' })
 
     expect(sidecarCalls(calls, 'next')).toHaveLength(1)
-    const ui = await $.ui.mount({ plugin: 'anki-claude-mod', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    const ui = await $.ui.mount({ plugin: 'anki', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
     expect(await ui.find({ type: 'Text', text: 'att förhandla' })).toBeDefined()
     await ui.unmount()
   })
@@ -124,7 +124,7 @@ describe('register', () => {
     on('turn.start', (_$, e) => ({ turnId: e.turnId }))
     on('process.run', fakeSidecar([], { cards: [] }))
     await $.turn.start({ text: 'hej', turnId: 't1' })
-    const ui = await $.ui.mount({ plugin: 'anki-claude-mod', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    const ui = await $.ui.mount({ plugin: 'anki', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
     expect(await ui.find({ type: 'Text', text: /Svensk · nothing due/ })).toBeDefined()
     await ui.unmount()
   })
@@ -136,7 +136,7 @@ describe('register', () => {
     on('turn.start', (_$, e) => ({ turnId: e.turnId }))
     on('process.run', fakeSidecar(calls, { installs }))
     await $.turn.start({ text: 'hej', turnId: 't1' })
-    const ui = await $.ui.mount({ plugin: 'anki-claude-mod', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    const ui = await $.ui.mount({ plugin: 'anki', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
     await ui.press({ key: 'show' })
     await ui.press({ key: 'good' })
 
@@ -151,7 +151,7 @@ describe('register', () => {
     on('turn.start', (_$, e) => ({ turnId: e.turnId }))
     on('process.run', fakeSidecar([], { isMissing: true }))
     await $.turn.start({ text: 'hej', turnId: 't1' })
-    const ui = await $.ui.mount({ plugin: 'anki-claude-mod', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    const ui = await $.ui.mount({ plugin: 'anki', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
     expect(await ui.find({ type: 'Text', text: /sidecar unavailable/ })).toBeDefined()
     await ui.unmount()
   })
@@ -165,7 +165,7 @@ describe('register', () => {
       return <Text>engine band</Text>
     })
     await $.turn.start({ text: 'hej', turnId: 't1' })
-    const ui = await $.ui.mount({ plugin: 'anki-claude-mod', surface: 'terminal', component: 'AbovePrompt', props: { ...PROPS, isWorking: false } })
+    const ui = await $.ui.mount({ plugin: 'anki', surface: 'terminal', component: 'AbovePrompt', props: { ...PROPS, isWorking: false } })
     expect(await ui.find({ text: /att förhandla/ })).toBeUndefined()
     expect(await ui.find({ text: 'engine band' })).toBeDefined()
     await ui.unmount()
