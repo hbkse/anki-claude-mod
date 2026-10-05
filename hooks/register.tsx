@@ -459,20 +459,13 @@ async function login($: EngineInterface): Promise<string> {
   return openLoginWindow($)
 }
 
-const NOTHING_SET_UP = 'To start: /anki login if you use AnkiWeb (recommended, keeps your phone in sync), or /anki setup for decks in Anki desktop\'s files on this computer.'
+const NOTHING_SET_UP = 'To start: /anki login to pull decks from AnkiWeb (recommended), or /anki setup for decks on this computer.'
 const NO_ANKIWEB_LOGIN = 'No AnkiWeb login yet: run /anki login to sync with AnkiWeb.'
 
 /** A warning when both are set up and the local decks aren't AnkiWeb's; '' when they match. */
 async function differenceWarning($: EngineInterface): Promise<string> {
   const reply = await sidecar($, ['compare'])
-  if (!reply.ok || !reply.differs) return ''
-  const list = (names: unknown) => (names as string[]).slice(0, 3).join(', ')
-  const parts = [
-    (reply.onlyLocal as string[]).length ? `${list(reply.onlyLocal)} only there` : '',
-    (reply.onlyAnkiweb as string[]).length ? `${list(reply.onlyAnkiweb)} only on AnkiWeb` : '',
-    (reply.changed as string[]).length ? `different cards in ${list(reply.changed)}` : '',
-  ].filter(Boolean)
-  return ` Heads up: your local collection differs from AnkiWeb (${parts.join('; ')}). anki uses AnkiWeb's decks; sync Anki desktop with AnkiWeb to bring the two together.`
+  return reply.ok && reply.differs ? ' Your local collection differs from AnkiWeb.' : ''
 }
 
 // Reviews go straight into a collection on this computer, usually Anki
@@ -659,7 +652,7 @@ export const register: Register = (on, options) => {
 
     if (current === null) {
       if (status === 'syncing') return <Text dimColor>  {title} · syncing with AnkiWeb…</Text>
-      if (status === 'logged_out') return <Text dimColor>  anki · /anki login to sync your decks from AnkiWeb, or /anki setup for local decks</Text>
+      if (status === 'logged_out') return <Text dimColor>  anki · /anki login to pull decks from AnkiWeb, or /anki setup for decks on this computer</Text>
       if (status === 'desktop_open') return <Text dimColor>  anki · paused while Anki desktop is open</Text>
       if (status === 'missing') return <Text dimColor>  anki · sidecar unavailable (/anki status)</Text>
       if (status === 'error') return <Text dimColor>  {title} · /anki status for details</Text>
