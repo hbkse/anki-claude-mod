@@ -228,7 +228,26 @@ async function commit($: EngineInterface): Promise<void> {
   unsynced++
 }
 
-async function sync($: EngineInterface, mode: '' | '--full-download' | '--full-upload' = ''): Promise<Reply> {
+/** What AnkiWeb sent with a sync, as a sentence to append; '' when nothing. */
+export function ankiwebSays(reply: Reply): string {
+  const message = reply.ok ? String(reply.serverMessage ?? '').trim() : ''
+  return message ? ` AnkiWeb says: ${message}` : ''
+}
+
+const ONE_WAY_SYNC = 'AnkiWeb needs a one-way sync: /anki download (take AnkiWeb\'s copy) or /anki upload (replace it with this one).'
+
+// A sync's own errors are AnkiWeb's (or the network's): never left unsaid.
+const ANKIWEB_ERRORS = ['auth', 'sync', 'network']
+
+/**
+ * Syncs with AnkiWeb. Unless `announce` is off (a command that reports the
+ * outcome itself), what AnkiWeb says and any sync error go up as a toast.
+ */
+async function sync(
+  $: EngineInterface,
+  mode: '' | '--full-download' | '--full-upload' = '',
+  { announce = true }: { announce?: boolean } = {},
+): Promise<Reply> {
   await commit($)
   // Logged out, keep saying so until a sync proves otherwise.
   const { status } = await read($, band)
@@ -240,16 +259,16 @@ async function sync($: EngineInterface, mode: '' | '--full-download' | '--full-u
   if (reply.ok) {
     lastSyncAt = await $.clock.now()
     unsynced = 0
-    // The login window finished: the first sync since is the moment to compare.
     if (isAwaitingLogin && reply.result !== 'local') {
+      // The login window finished, and this is the first sync since.
       isAwaitingLogin = false
-      const warning = await differenceWarning($)
-      $.ui.toast(`Logged in to AnkiWeb and synced.${warning}`, { timeoutMs: warning ? 15_000 : 6000 })
+      $.ui.toast(`Logged in to AnkiWeb and synced.${ankiwebSays(reply)}`, { timeoutMs: 10_000 })
+    } else if (announce && ankiwebSays(reply)) {
+      $.ui.toast(ankiwebSays(reply).trim(), { timeoutMs: 15_000 })
     }
-    if (reply.result === 'full_sync_required') {
-      $.ui.toast('AnkiWeb needs a one-way sync: /anki download (take AnkiWeb\'s copy) or /anki upload', { timeoutMs: 10_000 })
-    }
+    if (announce && reply.result === 'full_sync_required') $.ui.toast(ONE_WAY_SYNC, { timeoutMs: 10_000 })
   } else if (reply.code !== 'busy') {
+    if (announce && ANKIWEB_ERRORS.includes(reply.code)) $.ui.toast(`AnkiWeb sync failed: ${reply.message}`, { timeoutMs: 15_000 })
     await failed($, reply)
   }
   // The queue may have changed under us: reviews from the phone, new cards.
@@ -440,9 +459,9 @@ async function login($: EngineInterface): Promise<string> {
     if (picked) {
       const reply = await sidecar($, ['login', '--from-desktop', picked.profile])
       if (!reply.ok) return `Couldn't reuse Anki desktop's login: ${reply.message}`
-      const synced = await sync($)
+      const synced = await sync($, '', { announce: false })
       if (!synced.ok) return `Logged in; sync failed: ${synced.message}`
-      return `Logged in to AnkiWeb as ${String(reply.username)} with Anki desktop's sync key, and synced.${await differenceWarning($)}`
+      return `Logged in to AnkiWeb as ${String(reply.username)} with Anki desktop's sync key, and synced.${ankiwebSays(synced)}`
     }
     // They chose the password, so the window needs no second question.
     return openLoginWindow($)
@@ -461,12 +480,6 @@ async function login($: EngineInterface): Promise<string> {
 
 const NOTHING_SET_UP = 'To start: /anki login to pull decks from AnkiWeb (recommended), or /anki setup for decks on this computer.'
 const NO_ANKIWEB_LOGIN = 'No AnkiWeb login yet: run /anki login to sync with AnkiWeb.'
-
-/** A warning when both are set up and the local decks aren't AnkiWeb's; '' when they match. */
-async function differenceWarning($: EngineInterface): Promise<string> {
-  const reply = await sidecar($, ['compare'])
-  return reply.ok && reply.differs ? ' Your local collection differs from AnkiWeb.' : ''
-}
 
 // Reviews go straight into a collection on this computer, usually Anki
 // desktop's, with no AnkiWeb: for decks that aren't synced anywhere.
@@ -496,7 +509,7 @@ async function setup($: EngineInterface, path: string): Promise<string> {
 
   const where = String(reply.collection)
   if (reply.ankiwebActive) {
-    return `Saved ${where}, but you're logged in to AnkiWeb, which comes first: anki keeps using AnkiWeb's decks, and uses this collection only after /anki logout.${await differenceWarning($)}`
+    return `Saved ${where}, but you're logged in to AnkiWeb, which comes first: anki keeps using AnkiWeb's decks, and uses this collection only after /anki logout.`
   }
   const close = reply.desktopOpen ? ' Anki desktop has it open right now: close it while you review here.' : ' Close Anki desktop while you review here.'
   return `Reviewing ${where} directly; reviews go straight into it.${close} To sync with AnkiWeb instead (recommended), run /anki login.`
@@ -520,10 +533,11 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
     case 'download':
     case 'upload': {
       const mode = sub === 'download' ? '--full-download' : sub === 'upload' ? '--full-upload' : ''
-      const reply = await sync($, mode)
+      const reply = await sync($, mode, { announce: false })
       if (reply.ok && reply.result === 'local') return `Using local decks, which don't sync with AnkiWeb. ${NO_ANKIWEB_LOGIN}`
       if (!reply.ok && reply.code === 'logged_out') return NO_ANKIWEB_LOGIN
-      return reply.ok ? `AnkiWeb: ${String(reply.result).replace(/_/g, ' ')}` : `Sync failed: ${reply.message}`
+      if (reply.ok && reply.result === 'full_sync_required') return `${ONE_WAY_SYNC}${ankiwebSays(reply)}`
+      return reply.ok ? `AnkiWeb: ${String(reply.result).replace(/_/g, ' ')}.${ankiwebSays(reply)}` : `AnkiWeb sync failed: ${reply.message}`
     }
     case 'deck': {
       const name = rest.join(' ')
@@ -540,10 +554,7 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
       const c = await read($, counts)
       const deck = `deck ${(await chosenDeck($)) ?? 'not picked'}${c ? ` · ${tally(c) || 'nothing due'}` : ''}`
       if (reply.mode === 'local') return `Local decks from ${String(reply.collection)}, no AnkiWeb sync · ${deck}. /anki login to sync with AnkiWeb.`
-      if (reply.mode === 'ankiweb') {
-        const warning = reply.collection ? await differenceWarning($) : ''
-        return `Syncing with AnkiWeb as ${String(reply.username)} · ${deck} · ${unsynced + (pending ? 1 : 0)} reviews to sync.${warning}`
-      }
+      if (reply.mode === 'ankiweb') return `Syncing with AnkiWeb as ${String(reply.username)} · ${deck} · ${unsynced + (pending ? 1 : 0)} reviews to sync.`
       return NOTHING_SET_UP
     }
     default:

@@ -53,9 +53,10 @@ Then pick where your decks come from (`/anki` on its own says the same):
 /anki setup     # or use Anki desktop's decks on this computer, no AnkiWeb
 ```
 
-If you set up both, AnkiWeb comes first: anki reviews AnkiWeb's decks, and warns you when the
-local collection's decks differ from them (decks only one side has, or different card counts).
-The local collection is used again after `/anki logout`.
+If you set up both, AnkiWeb comes first: anki reviews AnkiWeb's decks, and the local collection,
+which isn't connected to AnkiWeb, is used again after `/anki logout`.
+
+Whatever AnkiWeb says when syncing, notices and errors alike, shows up as a toast.
 
 ### Syncing with AnkiWeb: `/anki login`
 

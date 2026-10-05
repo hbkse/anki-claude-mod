@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { appleScriptString, launchers, menuPage, parseReply, shellQuote, syncEndpoint, tally } from '../hooks/register'
+import { ankiwebSays, appleScriptString, launchers, menuPage, parseReply, shellQuote, syncEndpoint, tally } from '../hooks/register'
 
 const PROPS = {
   hasSurvey: false,
@@ -375,6 +375,13 @@ describe('helpers', () => {
     expect(syncEndpoint('https://sync.ankiweb.net')).toBeUndefined()
     expect(syncEndpoint('')).toBeUndefined()
     expect(syncEndpoint(' http://nas.local:8080/ ')).toBe('http://nas.local:8080/')
+  })
+
+  test('passes on what AnkiWeb said with a sync', async () => {
+    expect(ankiwebSays({ ok: true, result: 'synced', serverMessage: 'Maintenance on Sunday.' })).toBe(' AnkiWeb says: Maintenance on Sunday.')
+    expect(ankiwebSays({ ok: true, result: 'synced', serverMessage: '' })).toBe('')
+    expect(ankiwebSays({ ok: true, result: 'local' })).toBe('')
+    expect(ankiwebSays({ ok: false, code: 'sync', message: 'x' })).toBe('')
   })
 
   test('menu pages wrap around', async () => {

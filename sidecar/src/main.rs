@@ -385,47 +385,6 @@ fn setup(path: &str) -> Out {
     Ok(json!({ "collection": path, "desktopOpen": is_open, "ankiwebActive": read_auth().is_some() }))
 }
 
-/// `compare`: how the local collection's decks differ from the AnkiWeb copy's,
-/// by name and card count, when both are set up. AnkiWeb's are the ones used.
-fn compare() -> Out {
-    fn cards_by_deck(col: &mut Collection) -> std::result::Result<std::collections::BTreeMap<String, u32>, Fail> {
-        fn walk(node: &anki_proto::decks::DeckTreeNode, path: &str, out: &mut std::collections::BTreeMap<String, u32>) {
-            for child in &node.children {
-                let name = if path.is_empty() { child.name.clone() } else { format!("{path}::{}", child.name) };
-                // An empty Default is no deck to anyone.
-                if !(child.deck_id == 1 && child.total_including_children == 0) {
-                    out.insert(name.clone(), child.total_in_deck);
-                }
-                walk(child, &name, out);
-            }
-        }
-        let mut out = std::collections::BTreeMap::new();
-        walk(&col.deck_tree(Some(TimestampSecs::now()))?, "", &mut out);
-        Ok(out)
-    }
-
-    let (Some(_), Some(local)) = (read_auth(), local_collection()) else {
-        return Ok(json!({ "differs": false }));
-    };
-    let mut col = open_local(&local)?;
-    let here = cards_by_deck(&mut col)?;
-    col.close(None)?;
-    let mut col = CollectionBuilder::new(own_col_path()).build()?;
-    let synced = cards_by_deck(&mut col)?;
-    col.close(None)?;
-
-    let only_local: Vec<&String> = here.keys().filter(|d| !synced.contains_key(*d)).collect();
-    let only_ankiweb: Vec<&String> = synced.keys().filter(|d| !here.contains_key(*d)).collect();
-    let changed: Vec<&String> = here.iter().filter(|(d, n)| synced.get(*d).is_some_and(|m| m != *n)).map(|(d, _)| d).collect();
-    Ok(json!({
-        "differs": !(only_local.is_empty() && only_ankiweb.is_empty() && changed.is_empty()),
-        "collection": local,
-        "onlyLocal": only_local,
-        "onlyAnkiweb": only_ankiweb,
-        "changed": changed,
-    }))
-}
-
 /// `setup --reset`: back to the AnkiWeb copy.
 fn setup_reset() -> Out {
     let _ = fs::remove_file(local_path());
@@ -545,12 +504,16 @@ fn sync(full: Full) -> Out {
     let rt = runtime();
     let mut col = open()?;
 
+    // What AnkiWeb has to say to this account (a notice, a warning), shown
+    // as it's sent, the way Anki shows it after a sync.
+    let mut server_message = String::new();
     let required = if full == Full::No {
         let out = rt.block_on(col.normal_sync(sync_auth(&auth)?, client()))?;
         if let Some(endpoint) = out.new_endpoint {
             auth.endpoint = Some(endpoint);
             write_auth(&auth)?;
         }
+        server_message = out.server_message;
         out.required
     } else {
         SyncActionRequired::FullSyncRequired {
@@ -578,6 +541,7 @@ fn sync(full: Full) -> Out {
                     "result": "full_sync_required",
                     "uploadOk": upload_ok,
                     "downloadOk": download_ok,
+                    "serverMessage": server_message,
                 }));
             }
         }
@@ -589,7 +553,7 @@ fn sync(full: Full) -> Out {
 
     auth.has_synced = true;
     write_auth(&auth)?;
-    Ok(json!({ "result": result }))
+    Ok(json!({ "result": result, "serverMessage": server_message }))
 }
 
 /// Every deck, depth first as Anki lists them, with what's due in each
@@ -774,7 +738,6 @@ fn run(args: &[String]) -> Out {
         },
         Some("desktop-logins") => list_desktop_logins(),
         Some("local-collections") => local_collections(),
-        Some("compare") => compare(),
         Some("setup") => match flag(args, "--collection") {
             Some(path) => setup(&path),
             None if args.iter().any(|a| a == "--reset") => setup_reset(),
