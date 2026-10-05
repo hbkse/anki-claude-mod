@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { gradeButtons, hotkey, parseReply, tally } from '../hooks/register'
+import { parseReply, tally } from '../hooks/register'
 
 const PROPS = {
   hasSurvey: false,
@@ -78,7 +78,7 @@ describe('register', () => {
     })
   }
 
-  test('a double tap on a shared show/again key does not grade', { options: { againKey: '1' } }, async ($, on) => {
+  test('a double tap on 1 shows the answer without grading again', async ($, on) => {
     const calls: Call[] = []
     const clock = mock.clock(on, { now: 1000 })
     on('turn.start', (_$, e) => ({ turnId: e.turnId }))
@@ -91,6 +91,20 @@ describe('register', () => {
     expect(sidecarCalls(calls, 'answer')).toEqual([])
 
     await clock.advance(500)
+    await ui.press({ key: 'again' })
+    expect(sidecarCalls(calls, 'answer')).toEqual([['--card', '100', '--rating', 'again', '--ms', '500']])
+    await ui.unmount()
+  })
+
+  test('a grade pressed twice answers once', async ($, on) => {
+    const calls: Call[] = []
+    mock.clock(on, { now: 1000 })
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('process.run', fakeSidecar(calls))
+    await $.turn.start({ text: 'hej', turnId: 't1' })
+
+    const ui = await $.ui.mount({ plugin: 'anki', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    await ui.press({ key: 'show' })
     await Promise.all([ui.press({ key: 'easy' }), ui.press({ key: 'easy' })])
     expect(sidecarCalls(calls, 'answer')).toHaveLength(1)
     await ui.unmount()
@@ -185,18 +199,5 @@ describe('replies', () => {
   test('tally skips empty queues', async () => {
     expect(tally({ new: 3, learning: 0, review: 12 })).toBe('3 new · 12 due')
     expect(tally({ new: 0, learning: 0, review: 0 })).toBe('')
-  })
-})
-
-describe('keys', () => {
-  test('default layout is show 1, again 2, good 3, easy 4', async () => {
-    const defaults = { ankiwebUsername: '', ankiwebPassword: '', syncServer: '', deck: '', showKey: '1', againKey: '2', hardKey: '', goodKey: '3', easyKey: '4' }
-    expect(gradeButtons(defaults).map(g => `${g.key}:${g.name}`)).toEqual(['2:again', '3:good', '4:easy'])
-  })
-
-  test('rejects keys the engine would refuse', async () => {
-    expect(hotkey(' ')).toBeUndefined()
-    expect(hotkey('space')).toBeUndefined()
-    expect(hotkey('E')).toBe('e')
   })
 })

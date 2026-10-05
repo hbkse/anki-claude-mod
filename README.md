@@ -6,8 +6,9 @@ A Claude Code mod that shows your due Anki cards above the prompt while Claude w
 your reviews straight to AnkiWeb. You don't need Anki desktop or AnkiConnect: it works if you
 mostly study on AnkiDroid or AnkiMobile.
 
-Press `1` to show the answer, then grade it with `2` again, `3` good or `4` easy. The band only
-appears while a turn is running. When Claude finishes, it hides and leaves the prompt alone.
+Press `1` to show the answer, then grade it with Anki's keys: `1` again, `2` hard, `3` good,
+`4` easy. The band only appears while a turn is running. When Claude finishes, it hides and
+leaves the prompt alone.
 
 ## How it works
 
@@ -71,10 +72,9 @@ Replies come back as toasts, so none of this ends up in the transcript Claude re
 | --- | --- | --- |
 | `deck` | *(empty)* | Deck to review, subdecks included. Empty uses the collection's current deck. |
 | `syncServer` | *(empty)* | A [self-hosted sync server](https://docs.ankiweb.net/sync-server.html) URL instead of AnkiWeb |
-| `showKey` | `1` | Shows the answer |
-| `againKey` / `hardKey` / `goodKey` / `easyKey` | `2` / *(empty)* / `3` / `4` | Grades; an empty key hides that button |
 
-A key is one digit or one lowercase letter. Digits work straight from an empty composer.
+The keys aren't configurable. They work straight from an empty composer, and a second `1` within
+0.4 s of showing the answer is ignored, so a double tap doesn't grade a card you haven't read.
 
 ## Where things live
 

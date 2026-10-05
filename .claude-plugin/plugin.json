@@ -43,41 +43,6 @@
       "description": "Deck to review, subdecks included. Empty uses the collection's current deck.",
       "required": false,
       "default": ""
-    },
-    "showKey": {
-      "type": "string",
-      "title": "Show key",
-      "description": "Digit or lowercase letter that shows the answer.",
-      "required": false,
-      "default": "1"
-    },
-    "againKey": {
-      "type": "string",
-      "title": "Again key",
-      "description": "Key for Again; empty hides the button.",
-      "required": false,
-      "default": "2"
-    },
-    "hardKey": {
-      "type": "string",
-      "title": "Hard key",
-      "description": "Key for Hard; empty hides the button.",
-      "required": false,
-      "default": ""
-    },
-    "goodKey": {
-      "type": "string",
-      "title": "Good key",
-      "description": "Key for Good; empty hides the button.",
-      "required": false,
-      "default": "3"
-    },
-    "easyKey": {
-      "type": "string",
-      "title": "Easy key",
-      "description": "Key for Easy; empty hides the button.",
-      "required": false,
-      "default": "4"
     }
   }
 }

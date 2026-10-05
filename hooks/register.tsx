@@ -7,13 +7,18 @@ import type { Band, Card, Counts } from '../types'
 // talks to AnkiWeb. This module only draws the band and runs the sidecar, one
 // call at a time: it holds an exclusive lock on the collection while it runs.
 
+// Anki's own grade keys. Show shares 1 with again, so a grade on the show key
+// within GRADE_DELAY_MS of showing is taken as a double tap and ignored.
+const SHOW_KEY = '1'
 const GRADES = [
-  { name: 'again', ease: 1 },
-  { name: 'hard', ease: 2 },
-  { name: 'good', ease: 3 },
-  { name: 'easy', ease: 4 },
+  { name: 'again', key: '1' },
+  { name: 'hard', key: '2' },
+  { name: 'good', key: '3' },
+  { name: 'easy', key: '4' },
 ] as const
 const GRADE_DELAY_MS = 400
+
+type Grade = (typeof GRADES)[number]
 const MAX_ANSWER_MS = 60_000
 const SYNC_EVERY_MS = 10 * 60_000
 const SYNC_TIMEOUT_MS = 120_000
@@ -25,14 +30,12 @@ const isRevealed = atom({ plugin: 'anki', key: 'isRevealed' } as const, false)
 const band = atom({ plugin: 'anki', key: 'band' } as const, { status: 'idle', deck: '' })
 const counts = atom({ plugin: 'anki', key: 'counts' } as const, null)
 
-type Grade = (typeof GRADES)[number]['name']
 type Settings = {
   ankiwebUsername: string
   ankiwebPassword: string
   syncServer: string
   deck: string
-  showKey: string
-} & Record<`${Grade}Key`, string>
+}
 
 export type Reply = { ok: true; [key: string]: unknown } | { ok: false; code: string; message: string }
 
@@ -41,11 +44,6 @@ let settings: Settings = {
   ankiwebPassword: '',
   syncServer: '',
   deck: '',
-  showKey: '1',
-  againKey: '2',
-  hardKey: '',
-  goodKey: '3',
-  easyKey: '4',
 }
 let calls: Promise<unknown> = Promise.resolve()
 let binPath: string | null = null
@@ -55,23 +53,6 @@ let revealedAt = 0
 let lastSyncAt = 0
 let unsynced = 0
 let isSyncing = false
-
-export function hotkey(key: string | undefined): string | undefined {
-  const value = key?.trim().toLowerCase() ?? ''
-
-  return /^[0-9a-z]$/.test(value) ? value : undefined
-}
-
-export function gradeButtons(keys: Settings): { name: Grade; key: string }[] {
-  const taken = new Set<string>()
-
-  return GRADES.flatMap(({ name }) => {
-    const key = hotkey(keys[`${name}Key`])
-    if (key === undefined || taken.has(key)) return []
-    taken.add(key)
-    return [{ name, key }]
-  })
-}
 
 export function tally(c: Counts): string {
   return [c.new && `${c.new} new`, c.learning && `${c.learning} learn`, c.review && `${c.review} due`]
@@ -199,8 +180,7 @@ async function reveal($: EngineInterface): Promise<void> {
 
 async function answer($: EngineInterface, shown: Card, grade: Grade): Promise<void> {
   const now = await $.clock.now()
-  const sharesShowKey = gradeButtons(settings).some(g => g.key === hotkey(settings.showKey))
-  if (sharesShowKey && now - revealedAt < GRADE_DELAY_MS) return
+  if (grade.key === SHOW_KEY && now - revealedAt < GRADE_DELAY_MS) return
 
   let isClaimed = false
   await update($, card, c => {
@@ -210,7 +190,7 @@ async function answer($: EngineInterface, shown: Card, grade: Grade): Promise<vo
   if (!isClaimed) return
 
   const ms = Math.max(0, Math.min(now - shownAt, MAX_ANSWER_MS))
-  const reply = await sidecar($, ['answer', '--card', String(shown.id), '--rating', grade, '--ms', String(ms)])
+  const reply = await sidecar($, ['answer', '--card', String(shown.id), '--rating', grade.name, '--ms', String(ms)])
   if (!reply.ok) return failed($, reply)
   unsynced++
   await dealNext($)
@@ -353,8 +333,8 @@ export const register: Register = (on, options) => {
             <Box flexDirection="column">
               <Text>→ {current.answer || '(empty)'}</Text>
               <Box gap={2}>
-                {gradeButtons(settings).map(grade => (
-                  <Button key={grade.name} hotkey={grade.key} plain label={grade.name} onPress={() => answer($, current, grade.name)} />
+                {GRADES.map(grade => (
+                  <Button key={grade.name} hotkey={grade.key} plain label={grade.name} onPress={() => answer($, current, grade)} />
                 ))}
               </Box>
             </Box>
@@ -362,7 +342,7 @@ export const register: Register = (on, options) => {
           : (
             <Box gap={2}>
               <Text dimColor>→ ···</Text>
-              <Button key="show" hotkey={hotkey(settings.showKey)} plain label="show" onPress={() => reveal($)} />
+              <Button key="show" hotkey={SHOW_KEY} plain label="show" onPress={() => reveal($)} />
             </Box>
           )}
       </Box>
