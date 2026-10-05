@@ -46,7 +46,7 @@ The mod keeps the picked deck in `$.store` (`deck`).
   `sidecar login --interactive` (hidden password via rpassword). The window is opened in the
   host terminal, detected from env vars (`launchers()` in register.tsx), falling back to the OS
   terminal, then the clipboard. The window links to the README's
-  `#how-your-password-is-handled`; keep that heading.
+  `#ankiweb-password-information` section; if that heading changes, change the link too.
 - **Undo**: rslib's undo lives only while a collection is open, and the sidecar is one-shot, so
   the mod holds the last grade back (`pending`) and commits it on the next grade, a sync, a deck
   switch or session end. `next --skip` deals around the held card; `--at` records press time.
